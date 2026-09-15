@@ -5,6 +5,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <sqlite3.h>
 #import <Security/Security.h>
 
