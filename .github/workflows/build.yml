@@ -1,4 +1,4 @@
-name: Build Data Collector
+name: Build Data Collector v4
 on:
   workflow_dispatch:
   push:
@@ -8,20 +8,20 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compile collector.dylib
+      - name: Compile collector.dylib (CoreFoundation only)
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang src/main.m -o collector.dylib \
-            -framework Foundation -framework CoreFoundation -framework Security \
-            -framework CFNetwork -lsqlite3 \
+            -framework CoreFoundation -framework CFNetwork -framework Security \
             -isysroot "$SDK" -arch arm64 -arch arm64e \
-            -miphoneos-version-min=15.0 -fobjc-arc -dynamiclib -Oz \
-            -Wno-deprecated-declarations -Wno-availability
-          ldid -S collector.dylib 2>/dev/null || brew install ldid && ldid -S collector.dylib
+            -miphoneos-version-min=15.0 -dynamiclib -Oz \
+            -Wno-deprecated-declarations
+          brew install ldid && ldid -S collector.dylib
+          echo "=== Result ==="
           file collector.dylib
           ls -la collector.dylib
-          nm collector.dylib | grep "_ds_start\|_process"
+          nm collector.dylib | grep "_ds_start"
       - uses: actions/upload-artifact@v4
         with:
-          name: collector
+          name: collector-v4
           path: collector.dylib

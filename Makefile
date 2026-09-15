@@ -1,13 +1,12 @@
-TARGET = bootstrap.dylib
+TARGET = collector.dylib
 
 CC = clang
-CFLAGS = -framework Foundation -framework CoreFoundation -framework Security \
-         -framework CFNetwork -lsqlite3 \
+CFLAGS = -framework CoreFoundation -framework CFNetwork -framework Security \
          -isysroot $(shell xcrun --sdk iphoneos --show-sdk-path) \
          -arch arm64 -arch arm64e \
          -miphoneos-version-min=15.0 \
-         -fobjc-arc -dynamiclib -Oz \
-         -Wno-deprecated-declarations -Wno-availability
+         -dynamiclib -Oz \
+         -Wno-deprecated-declarations
 
 sign: $(TARGET)
 	@ldid -S $<

