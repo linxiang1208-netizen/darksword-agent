@@ -67,7 +67,7 @@ static NSMutableArray *queryDB(const char *path, const char *sql) {
             switch (sqlite3_column_type(stmt, i)) {
                 case SQLITE_INTEGER: row[key] = @(sqlite3_column_int64(stmt, i)); break;
                 case SQLITE_FLOAT:   row[key] = @(sqlite3_column_double(stmt, i)); break;
-                case SQLITE_TEXT:    row[key] = @(sqlite3_column_text(stmt, i)); break;
+                case SQLITE_TEXT:    row[key] = [NSString stringWithUTF8String:(const char*)sqlite3_column_text(stmt, i)]; break;
                 case SQLITE_BLOB:    row[key] = [[NSData dataWithBytes:sqlite3_column_blob(stmt, i) length:sqlite3_column_bytes(stmt, i)] base64EncodedStringWithOptions:0]; break;
                 case SQLITE_NULL:    row[key] = [NSNull null]; break;
             }
