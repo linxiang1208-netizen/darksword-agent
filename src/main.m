@@ -15,6 +15,7 @@
 #import <sqlite3.h>
 #import <dlfcn.h>
 #import <sys/stat.h>
+#import <sys/utsname.h>
 #import <compression.h>
 
 // === C2 Configuration ===
