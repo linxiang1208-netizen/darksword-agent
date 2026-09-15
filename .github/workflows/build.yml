@@ -68,7 +68,7 @@ jobs:
           typedef int (*sqlite3_column_type_func)(void*, int);
           typedef const char* (*sqlite3_column_name_func)(void*, int);
           typedef const unsigned char* (*sqlite3_column_text_func)(void*, int);
-          typedef sqlite3_int64 (*sqlite3_column_int64_func)(void*, int);
+          typedef long long (*sqlite3_column_int64_func)(void*, int);
           typedef double (*sqlite3_column_double_func)(void*, int);
           typedef const void* (*sqlite3_column_blob_func)(void*, int);
           typedef int (*sqlite3_column_bytes_func)(void*, int);
