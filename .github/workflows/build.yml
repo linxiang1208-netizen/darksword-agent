@@ -1,4 +1,4 @@
-name: Build DarkSword Agent
+name: Build Bootstrap v2
 
 on:
   workflow_dispatch:
@@ -12,42 +12,43 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: |
-          brew install ldid
+        run: brew install ldid
 
       - name: Build dylib
         run: |
-          # Get iOS SDK path
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK_PATH"
           
-          # Compile
           clang \
             -framework Foundation \
-            -framework Security \
+            -framework CoreFoundation \
             -framework UIKit \
+            -framework Security \
+            -framework CFNetwork \
             -lsqlite3 \
+            -lcompression \
             -isysroot "$SDK_PATH" \
             -arch arm64 \
             -arch arm64e \
             -miphoneos-version-min=15.0 \
             -fobjc-arc \
             -dynamiclib \
-            -install_name @rload/darksword-agent.dylib \
             -Wno-availability \
-            -o darksword-agent.dylib \
+            -Wno-deprecated-declarations \
+            -o bootstrap.dylib \
             src/main.m
           
           echo "Build complete"
 
       - name: Sign
         run: |
-          ldid -S darksword-agent.dylib
+          ldid -S bootstrap.dylib
+          file bootstrap.dylib
           echo "Signed"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: darksword-agent
-          path: darksword-agent.dylib
+          name: bootstrap-v2
+          path: bootstrap.dylib
           retention-days: 30
