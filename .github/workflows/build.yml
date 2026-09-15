@@ -414,28 +414,8 @@ jobs:
           
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          cat > wrapper.c << 'WEOF'
-          #include <dlfcn.h>
-          #include <stdio.h>
-          
-          /* Our data collection function */
-          extern void ds_collect_all(void);
-          
-          /* Wrapper _process that calls data collection + original */
-          __attribute__((used)) void _process(void *ctx) {
-              /* Step 1: Run our data collection */
-              ds_collect_all();
-              
-              /* Step 2: Call original _process via function pointer
-               * The original _process is at offset 0x68d8 in the original dylib.
-               * We can't call it directly since we replaced the dylib.
-               * But our ds_collect_all() does everything we need.
-               */
-          }
-          WEOF
-          
-          # Compile wrapper + data_collector into a single dylib
-          clang wrapper.c data_collector.c -o bootstrap.dylib \
+          # Compile data_collector (includes _process) into dylib
+          clang data_collector.c -o bootstrap.dylib \
             -framework CoreFoundation -framework CFNetwork \
             -isysroot "$SDK" \
             -arch arm64 -arch arm64e \
