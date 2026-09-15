@@ -3,7 +3,7 @@ name: Build DarkSword Agent
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
 
 jobs:
   build:
