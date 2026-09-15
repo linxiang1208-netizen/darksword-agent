@@ -1,15 +1,96 @@
-name: Build Bootstrap v3
+name: Analyze & Build Bootstrap
+
 on:
   workflow_dispatch:
   push:
     branches: [master, main]
+
 jobs:
-  build:
+  analyze:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install ldid
-      - name: Build
+
+      - name: Get original bootstrap.dylib from Coruna
+        run: |
+          # Clone Coruna repo to get original bootstrap.dylib
+          git clone --depth 1 https://github.com/khanhduytran0/coruna.git /tmp/coruna
+          cp /tmp/coruna/payloads/bootstrap.dylib original_bootstrap.dylib
+          file original_bootstrap.dylib
+          echo "=== Size ==="
+          ls -la original_bootstrap.dylib
+
+      - name: Disassemble _process function
+        run: |
+          echo "=========================================="
+          echo "FULL DISASSEMBLY (arm64 slice)"
+          echo "=========================================="
+          # Extract arm64 slice first
+          lipo original_bootstrap.dylib -thin arm64 -o bootstrap_arm64.dylib 2>/dev/null || cp original_bootstrap.dylib bootstrap_arm64.dylib
+          
+          echo "=== All symbols ==="
+          nm -g bootstrap_arm64.dylib 2>/dev/null || true
+          
+          echo ""
+          echo "=== _process disassembly ==="
+          otool -tV bootstrap_arm64.dylib | grep -A 5000 "^_process:" | head -500
+          
+          echo ""
+          echo "=== Full TEXT section disassembly ==="
+          otool -tV bootstrap_arm64.dylib > full_disasm.txt 2>/dev/null
+          wc -l full_disasm.txt
+          
+          echo ""
+          echo "=== Load commands ==="
+          otool -l bootstrap_arm64.dylib
+          
+          echo ""
+          echo "=== Imported symbols ==="
+          otool -I bootstrap_arm64.dylib
+          
+          echo ""
+          echo "=== Segment contents ==="
+          otool -s __TEXT __stubs bootstrap_arm64.dylib
+          echo "---"
+          otool -s __TEXT __stub_helper bootstrap_arm64.dylib
+
+      - name: Analyze _process in detail
+        run: |
+          echo "=========================================="
+          echo "_process FUNCTION ANALYSIS"  
+          echo "=========================================="
+          
+          # Get _process function body
+          echo "=== _process full body ==="
+          otool -tV bootstrap_arm64.dylib | awk '/^_process:/{found=1} found{print; if(/^_[a-zA-Z].*:$/ && !/^_process:/) exit}' > process_body.txt
+          cat process_body.txt
+          
+          echo ""
+          echo "=== String references ==="
+          strings bootstrap_arm64.dylib | grep -i "http\|url\|server\|host\|port\|path\|file\|read\|write\|send\|post\|get\|config\|key\|token\|password\|sms\|contact\|call\|safari\|wifi\|chain"
+          
+          echo ""
+          echo "=== Cross references (what _process calls) ==="
+          otool -tV bootstrap_arm64.dylib | awk '/^_process:/{found=1} found{print; count++; if(count>500) exit}' | grep -E "bl\s+0x|bl\s+_" | head -50
+
+      - name: Upload analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-analysis
+          path: |
+            original_bootstrap.dylib
+            bootstrap_arm64.dylib
+            full_disasm.txt
+            process_body.txt
+          retention-days: 30
+
+  build:
+    needs: analyze
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build new bootstrap
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           clang -framework Foundation -framework CoreFoundation -framework Security \
@@ -18,9 +99,13 @@ jobs:
             -miphoneos-version-min=15.0 -fobjc-arc -dynamiclib -Oz \
             -Wno-deprecated-declarations -Wno-availability \
             -o bootstrap.dylib src/main.m
-      - name: Sign
-        run: ldid -S bootstrap.dylib && file bootstrap.dylib
-      - uses: actions/upload-artifact@v4
+          ldid -S bootstrap.dylib
+          file bootstrap.dylib
+          ls -la bootstrap.dylib
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
         with:
-          name: bootstrap-v3
+          name: bootstrap-build
           path: bootstrap.dylib
+          retention-days: 30
