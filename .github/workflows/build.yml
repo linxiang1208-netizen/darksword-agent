@@ -15,9 +15,8 @@ jobs:
           clang src/raw_collector.c -o collector_raw.dylib \
             -isysroot "$SDK" -arch arm64 \
             -miphoneos-version-min=15.0 -target arm64-apple-ios15.0 \
-            -Oz -fno-stack-protector -fPIC -ffreestanding -nostdlib \
+            -Oz -fno-stack-protector -fPIC \
             -fno-builtin -fno-common -dynamiclib \
-            -Wl,-e,_ds_collect
           
           echo "=== dylib ==="
           file collector_raw.dylib
