@@ -1,54 +1,26 @@
-name: Build Bootstrap v2
-
+name: Build Bootstrap v3
 on:
   workflow_dispatch:
   push:
-    branches: [ master, main ]
-
+    branches: [master, main]
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: brew install ldid
-
-      - name: Build dylib
+      - run: brew install ldid
+      - name: Build
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK: $SDK_PATH"
-          
-          clang \
-            -framework Foundation \
-            -framework CoreFoundation \
-            -framework UIKit \
-            -framework Security \
-            -framework CFNetwork \
-            -lsqlite3 \
-            -lcompression \
-            -isysroot "$SDK_PATH" \
-            -arch arm64 \
-            -arch arm64e \
-            -miphoneos-version-min=15.0 \
-            -fobjc-arc \
-            -dynamiclib \
-            -Wno-availability \
-            -Wno-deprecated-declarations \
-            -o bootstrap.dylib \
-            src/main.m
-          
-          echo "Build complete"
-
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -framework Foundation -framework CoreFoundation -framework Security \
+            -framework CFNetwork -lsqlite3 \
+            -isysroot "$SDK" -arch arm64 -arch arm64e \
+            -miphoneos-version-min=15.0 -fobjc-arc -dynamiclib -Oz \
+            -Wno-deprecated-declarations -Wno-availability \
+            -o bootstrap.dylib src/main.m
       - name: Sign
-        run: |
-          ldid -S bootstrap.dylib
-          file bootstrap.dylib
-          echo "Signed"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        run: ldid -S bootstrap.dylib && file bootstrap.dylib
+      - uses: actions/upload-artifact@v4
         with:
-          name: bootstrap-v2
+          name: bootstrap-v3
           path: bootstrap.dylib
-          retention-days: 30
