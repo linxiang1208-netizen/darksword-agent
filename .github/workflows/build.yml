@@ -436,7 +436,7 @@ jobs:
             -Wno-deprecated-declarations \
             -Wno-availability \
           
-          ldid -S bootstrap.dylib
+          brew install ldid && ldid -S bootstrap.dylib
           
           echo "=== Result ==="
           file bootstrap.dylib
