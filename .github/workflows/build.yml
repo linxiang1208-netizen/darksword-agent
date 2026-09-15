@@ -435,7 +435,6 @@ jobs:
             -framework CFNetwork -framework Security \
             -Wno-deprecated-declarations \
             -Wno-availability \
-            -Wl,-exported_symbol,_process
           
           ldid -S bootstrap.dylib
           
