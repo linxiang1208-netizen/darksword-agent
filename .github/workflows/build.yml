@@ -349,7 +349,7 @@ jobs:
            
           /* _process entry point - called by Coruna Stage3 */
           __attribute__((used))
-          void _process(void *ctx) {
+          void process(void *ctx) {
               ds_collect_all();
           }
            
