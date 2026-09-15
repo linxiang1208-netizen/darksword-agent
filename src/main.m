@@ -13,6 +13,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CFNetwork/CFNetwork.h>
+#include <Security/Security.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
