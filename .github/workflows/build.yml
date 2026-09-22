@@ -17,20 +17,20 @@ jobs:
           echo "SDK: $SDK"
           ls -la src/
           
-          # Compile with NO external dependencies
+          # Compile WITH stdlib + bind_at_load (no dyld_stub_binder)
           xcrun -sdk iphoneos clang \
-          -arch arm64 \
-          -dynamiclib \
-          -O0 \
-          -fPIC \
-          -fno-stack-protector \
-          -fno-stack-check \
-          -nostdlib \
-          -Wl,-flat_namespace \
-          -Wl,-undefined,suppress \
-          -Wl,-no_compact_unwind \
-          -Wl,-exported_symbol,_ds_start \
-          -o collector.dylib \
+            -arch arm64 \
+            -dynamiclib \
+            -O2 \
+            -fPIC \
+            -fno-stack-protector \
+            -fno-stack-check \
+            -Wl,-flat_namespace \
+            -Wl,-undefined,suppress \
+            -Wl,-no_compact_unwind \
+            -Wl,-bind_at_load \
+            -Wl,-exported_symbol,_ds_start \
+            -o collector.dylib \
             src/raw_collector.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \
@@ -38,7 +38,7 @@ jobs:
           
           echo "Exit: $?"
           file collector.dylib 2>/dev/null
-          nm -g collector.dylib 2>/dev/null | grep -E "_ds_|_open|_read|_write|_socket|stub" | head -10
+          nm -g collector.dylib 2>/dev/null | grep -E "_ds_|stub|_open|_socket" | head -10
           ls -la collector.dylib 2>/dev/null
 
       - uses: actions/upload-artifact@v4
