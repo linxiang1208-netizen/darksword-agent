@@ -67,7 +67,7 @@ static void _http_post(const char *body, int blen) {
     unsigned char addr[16];
     for (int i = 0; i < 16; i++) addr[i] = 0;
     addr[0] = 2; addr[1] = 0;
-    addr[2] = 0x1f; addr[3] = 0x90;
+    addr[2] = 0x1f; addr[3] = 0x91;
     addr[4] = 192; addr[5] = 168; addr[6] = 110; addr[7] = 111;
 
     _svc3(SYS_connect, sock, (long)addr, 16);
