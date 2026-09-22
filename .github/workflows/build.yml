@@ -25,6 +25,7 @@ jobs:
             -O2 \
             -fPIC \
             -fno-stack-protector \
+            -fno-stack-check \
             -fno-builtin \
             -nostdlib \
             -Wl,-flat_namespace \
