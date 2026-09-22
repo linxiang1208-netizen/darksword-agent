@@ -1,213 +1,37 @@
-name: Binary Patch Bootstrap v2
+name: Build Collector Dylib
 on:
-  workflow_dispatch:
-  push:
-    branches: [master, main]
+  workflow_dispatch: {}
+
 jobs:
-  patch:
-    runs-on: macos-latest
+  build:
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Compile raw collector as dylib (pure syscalls)
+
+      - name: Build collector.dylib for iOS arm64
         run: |
+          xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang src/raw_collector.c -o collector_raw.dylib \
-            -isysroot "$SDK" -arch arm64 \
-            -miphoneos-version-min=15.0 -target arm64-apple-ios15.0 \
-            -Oz -fno-stack-protector -fPIC \
-            -fno-builtin -fno-common -dynamiclib \
+          echo "SDK: $SDK"
           
-          echo "=== dylib ==="
-          file collector_raw.dylib
-          ls -la collector_raw.dylib
-          nm collector_raw.dylib | grep -E "T |D |S "
+          xcrun -sdk iphoneos clang \
+            -arch arm64 \
+            -shared \
+            -O2 \
+            -fPIC \
+            -o collector.dylib \
+            src/collector_cf.c \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=13.0
           
-          echo "=== Sections ==="
-          otool -l collector_raw.dylib | grep -E "sectname|segname|size|offset|addr"
-      
-      - name: Binary patch bootstrap
-        run: |
-          git clone --depth 1 https://github.com/khanhduytran0/coruna.git /tmp/coruna
-          cp /tmp/coruna/payloads/bootstrap.dylib original.dylib
-          lipo original.dylib -thin arm64 -o orig_arm64.dylib 2>/dev/null || cp original.dylib orig_arm64.dylib
-          
-          python3 << 'PYEOF'
-          import struct
-          
-          # === Read collector dylib, extract ENTIRE __TEXT segment ===
-          with open("collector_raw.dylib", "rb") as f:
-              cd = f.read()
-          
-          # Parse collector dylib
-          cncmds = struct.unpack_from('<I', cd, 16)[0]
-          coff = 32
-          c_text_vmaddr = 0
-          c_text_fileoff = 0
-          c_text_filesize = 0
-          ds_collect_vmaddr = 0
-          for i in range(cncmds):
-              cmd = struct.unpack_from('<I', cd, coff)[0]
-              cmdsize = struct.unpack_from('<I', cd, coff+4)[0]
-              if cmd == 0x19:  # LC_SEGMENT_64
-                  segname = cd[coff+8:coff+24].rstrip(b'\x00').decode()
-                  if segname == '__TEXT':
-                      c_text_vmaddr = struct.unpack_from('<Q', cd, coff+24)[0]
-                      c_text_fileoff = struct.unpack_from('<Q', cd, coff+40)[0]
-                      c_text_filesize = struct.unpack_from('<Q', cd, coff+48)[0]
-              elif cmd == 2:  # LC_SYMTAB
-                  symoff = struct.unpack_from('<I', cd, coff+8)[0]
-                  nsyms = struct.unpack_from('<I', cd, coff+12)[0]
-                  stroff = struct.unpack_from('<I', cd, coff+16)[0]
-                  for j in range(nsyms):
-                      entry = symoff + j*16
-                      strx = struct.unpack_from('<I', cd, entry)[0]
-                      name = b''
-                      s = stroff + strx
-                      while s < len(cd) and cd[s]:
-                          name += bytes([cd[s]])
-                          s += 1
-                      if name == b'_ds_collect':
-                          ds_collect_vmaddr = struct.unpack_from('<Q', cd, entry+8)[0]
-              coff += cmdsize
-          
-          # Extract entire __TEXT segment bytes
-          c_text_bytes = cd[c_text_fileoff:c_text_fileoff+c_text_filesize]
-          ds_collect_rel = ds_collect_vmaddr - c_text_vmaddr  # offset within __TEXT
-          print(f"collector __TEXT: {len(c_text_bytes)} bytes, vmaddr=0x{c_text_vmaddr:x}")
-          print(f"ds_collect vmaddr=0x{ds_collect_vmaddr:x}, rel=0x{ds_collect_rel:x}")
-          
-          # === Read original bootstrap arm64 ===
-          with open("orig_arm64.dylib", "rb") as f:
-              bd = bytearray(f.read())
-          
-          # Parse bootstrap
-          bncmds = struct.unpack_from('<I', bd, 16)[0]
-          boff = 32
-          b_text_vmaddr = 0
-          b_text_fileoff = 0
-          b_text_filesize = 0
-          b_text_vmsize = 0
-          b_text_sect_size = 0
-          process_off = 0
-          for i in range(bncmds):
-              cmd = struct.unpack_from('<I', bd, boff)[0]
-              cmdsize = struct.unpack_from('<I', bd, boff+4)[0]
-              if cmd == 0x19:
-                  segname = bd[boff+8:boff+24].rstrip(b'\x00').decode()
-                  if segname == '__TEXT':
-                      b_text_vmaddr = struct.unpack_from('<Q', bd, boff+24)[0]
-                      b_text_vmsize = struct.unpack_from('<Q', bd, boff+32)[0]
-                      b_text_fileoff = struct.unpack_from('<Q', bd, boff+40)[0]
-                      b_text_filesize = struct.unpack_from('<Q', bd, boff+48)[0]
-                      nsects = struct.unpack_from('<I', bd, boff+64)[0]
-                      soff = boff + 72
-                      for j in range(nsects):
-                          sname = bd[soff+8:soff+24].rstrip(b'\x00').decode()
-                          ssize = struct.unpack_from('<I', bd, soff+36)[0]
-                          if sname == '__text':
-                              b_text_sect_size = ssize
-                          soff += 80
-              elif cmd == 2:
-                  symoff = struct.unpack_from('<I', bd, boff+8)[0]
-                  nsyms = struct.unpack_from('<I', bd, boff+12)[0]
-                  stroff = struct.unpack_from('<I', bd, boff+16)[0]
-                  for j in range(nsyms):
-                      entry = symoff + j*16
-                      strx = struct.unpack_from('<I', bd, entry)[0]
-                      name = b''
-                      s = stroff + strx
-                      while s < len(bd) and bd[s]:
-                          name += bytes([bd[s]])
-                          s += 1
-                      if name == b'_process':
-                          process_off = struct.unpack_from('<Q', bd, entry+8)[0]
-              boff += cmdsize
-          
-          print(f"bootstrap __TEXT: vmaddr=0x{b_text_vmaddr:x} fileoff=0x{b_text_fileoff:x} filesize=0x{b_text_filesize:x}")
-          print(f"_process at 0x{process_off:x}")
-          
-          # Find ret instruction after _process
-          pf_off = b_text_fileoff + process_off
-          ret_file_off = 0
-          for pos in range(pf_off, min(pf_off + 0x400, len(bd) - 4)):
-              if bd[pos:pos+4] == b'\xc0\x03\x5f\xd6':  # ret
-                  ret_file_off = pos
-                  break
-          if ret_file_off == 0:
-              print("ERROR: ret not found")
-              exit(1)
-          ret_vmaddr = b_text_vmaddr + (ret_file_off - b_text_fileoff)
-          print(f"ret at file 0x{ret_file_off:x}, vmaddr 0x{ret_vmaddr:x}")
-          
-          # === Append collector __TEXT to end of bootstrap ===
-          # Align to page (0x1000) for clean append
-          append_off = len(bd)
-          if append_off % 16 != 0:
-              pad = 16 - (append_off % 16)
-              bd.extend(b'\x00' * pad)
-              append_off = len(bd)
-          
-          # ds_collect new vmaddr
-          ds_new_vmaddr = b_text_vmaddr + (append_off - b_text_fileoff) + ds_collect_rel
-          print(f"Appending {len(c_text_bytes)} bytes at file 0x{append_off:x}")
-          print(f"ds_collect new vmaddr: 0x{ds_new_vmaddr:x}")
-          
-          bd.extend(c_text_bytes)
-          
-          # === Patch ret -> B ds_collect ===
-          branch_dist = ds_new_vmaddr - ret_vmaddr
-          if branch_dist % 4 != 0 or branch_dist > 0x7FFFFFF or branch_dist < -0x8000000:
-              print(f"ERROR: branch dist {branch_dist} invalid")
-              exit(1)
-          branch_imm = (branch_dist // 4) & 0x3FFFFFF
-          b_instr = 0x14000000 | branch_imm
-          b_bytes = struct.pack('<I', b_instr)
-          bd[ret_file_off:ret_file_off+4] = b_bytes
-          print(f"Branch: 0x{ret_vmaddr:x} -> 0x{ds_new_vmaddr:x} (dist={branch_dist}, instr=0x{b_instr:08x})")
-          
-          # === Update __TEXT segment sizes ===
-          boff = 32
-          for i in range(bncmds):
-              cmd = struct.unpack_from('<I', bd, boff)[0]
-              cmdsize = struct.unpack_from('<I', bd, boff+4)[0]
-              if cmd == 0x19:
-                  segname = bd[boff+8:boff+24].rstrip(b'\x00').decode()
-                  if segname == '__TEXT':
-                      struct.pack_into('<Q', bd, boff+32, b_text_vmsize + len(c_text_bytes) + 0x1000)
-                      struct.pack_into('<Q', bd, boff+48, b_text_filesize + len(c_text_bytes) + 0x1000)
-                      nsects = struct.unpack_from('<I', bd, boff+64)[0]
-                      soff = boff + 72
-                      for j in range(nsects):
-                          sname = bd[soff+8:soff+24].rstrip(b'\x00').decode()
-                          if sname == '__text':
-                              struct.pack_into('<I', bd, soff+36, b_text_sect_size + len(c_text_bytes) + 0x1000)
-                          soff += 80
-              boff += cmdsize
-          
-          print(f"Updated __TEXT sizes")
-          
-          with open("bootstrap_patched.dylib", "wb") as f:
-              f.write(bd)
-          print(f"Patched: {len(bd)} bytes")
-          PYEOF
-          
-          echo "=== Result ==="
-          file bootstrap_patched.dylib
-          ls -la bootstrap_patched.dylib
-          
-          # Verify _process still at 0x68d8
-          nm bootstrap_patched.dylib | grep "_process" | head -1
-      
-      - name: Sign and finalize
-        run: |
-          cp bootstrap_patched.dylib bootstrap.dylib
-          brew install ldid && ldid -S bootstrap.dylib 2>/dev/null || true
-          file bootstrap.dylib
-          ls -la bootstrap.dylib
-      
+          echo "=== Verify ==="
+          file collector.dylib
+          nm -g collector.dylib | grep _process
+          otool -l collector.dylib | grep -A5 '__TEXT'
+          ls -la collector.dylib
+
       - uses: actions/upload-artifact@v4
         with:
-          name: patched-bootstrap-v2
-          path: bootstrap.dylib
+          name: collector-dylib
+          path: collector.dylib
           retention-days: 30
