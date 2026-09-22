@@ -12,11 +12,14 @@ jobs:
 
       - name: Build collector.dylib for iOS arm64
         run: |
-          set -ex
+          set -x
           xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK"
+          echo "SDK contents:"
+          ls "$SDK/usr/include/sys/" | head -20
           
+          echo "=== Compiling ==="
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
@@ -26,7 +29,7 @@ jobs:
             src/collector_cf.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \
-            -Wl,-no_compact_unwind
+            2>&1 || { echo "COMPILE FAILED"; exit 1; }
           
           echo "=== Verify ==="
           file collector.dylib
