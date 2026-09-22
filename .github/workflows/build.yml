@@ -12,24 +12,25 @@ jobs:
 
       - name: Build collector.dylib for iOS arm64
         run: |
+          set -ex
           xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK"
           
           xcrun -sdk iphoneos clang \
             -arch arm64 \
-            -shared \
+            -dynamiclib \
             -O2 \
             -fPIC \
             -o collector.dylib \
             src/collector_cf.c \
             -isysroot "$SDK" \
-            -miphoneos-version-min=13.0
+            -miphoneos-version-min=13.0 \
+            -Wl,-no_compact_unwind
           
           echo "=== Verify ==="
           file collector.dylib
           nm -g collector.dylib | grep _process
-          otool -l collector.dylib | grep -A5 '__TEXT'
           ls -la collector.dylib
 
       - uses: actions/upload-artifact@v4
