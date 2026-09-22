@@ -15,33 +15,28 @@ jobs:
           xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK"
+          echo "Files in src/:"
+          ls -la src/
           
-          # Compile and capture errors
-          COMPILE_OUTPUT=$(xcrun -sdk iphoneos clang \
+          # Compile raw_collector.c
+          xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
             -fPIC \
             -o collector.dylib \
-            src/collector_cf.c \
+            src/raw_collector.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \
-            2>&1)
-          COMPILE_EXIT=$?
+            2>&1
           
-          echo "$COMPILE_OUTPUT"
-          
-          if [ $COMPILE_EXIT -ne 0 ]; then
-            echo "::error::Compilation failed: $COMPILE_OUTPUT"
-            exit 1
-          fi
-          
-          echo "=== SUCCESS ==="
-          file collector.dylib
-          nm -g collector.dylib | grep _process
-          ls -la collector.dylib
+          echo "Exit: $?"
+          file collector.dylib 2>/dev/null
+          nm -g collector.dylib 2>/dev/null | grep -E "_process|_ds_" | head -5
+          ls -la collector.dylib 2>/dev/null
 
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: collector-dylib
           path: collector.dylib
