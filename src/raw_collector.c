@@ -43,9 +43,11 @@ static void _stderr(const char *msg) {
     _svc3(4, 2, (long)msg, _strlen(msg));
 }
 
-/* Exported buffers for JS to read via cDylibBuf */
-char result_buf[512];
-int result_len;
+/* Exported buffers in __TEXT,__text (confirmed writable - bootstrap patches branches here) */
+__attribute__((section("__TEXT,__text")))
+char result_buf[512] = {0};
+__attribute__((section("__TEXT,__text")))
+int result_len = 0;
 
 static void _append(const char *s) {
     int sl = _strlen(s);
