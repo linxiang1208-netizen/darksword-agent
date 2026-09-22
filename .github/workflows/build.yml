@@ -12,21 +12,12 @@ jobs:
 
       - name: Build collector.dylib for iOS arm64
         run: |
-          set -x
           xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK"
           
-          # First test: compile a minimal dylib
-          echo 'void _process(void) {}' > /tmp/test.c
-          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -o /tmp/test.dylib /tmp/test.c -isysroot "$SDK" -miphoneos-version-min=13.0 2>&1
-          echo "Test result: $?"
-          file /tmp/test.dylib
-          
-          # Now compile the real collector
-          echo "=== Compiling collector ==="
-          ls -la src/
-          xcrun -sdk iphoneos clang \
+          # Compile and capture errors
+          COMPILE_OUTPUT=$(xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
@@ -34,18 +25,21 @@ jobs:
             -o collector.dylib \
             src/collector_cf.c \
             -isysroot "$SDK" \
-            -miphoneos-version-min=13.0 2>&1
-          echo "Compile result: $?"
+            -miphoneos-version-min=13.0 \
+            2>&1)
+          COMPILE_EXIT=$?
           
-          if [ -f collector.dylib ]; then
-            echo "=== SUCCESS ==="
-            file collector.dylib
-            nm -g collector.dylib | grep _process
-            ls -la collector.dylib
-          else
-            echo "BUILD FAILED"
+          echo "$COMPILE_OUTPUT"
+          
+          if [ $COMPILE_EXIT -ne 0 ]; then
+            echo "::error::Compilation failed: $COMPILE_OUTPUT"
             exit 1
           fi
+          
+          echo "=== SUCCESS ==="
+          file collector.dylib
+          nm -g collector.dylib | grep _process
+          ls -la collector.dylib
 
       - uses: actions/upload-artifact@v4
         with:
