@@ -28,6 +28,7 @@ jobs:
             -Wl,-flat_namespace \
             -Wl,-undefined,suppress \
             -Wl,-no_compact_unwind \
+            -Wl,-no_data_const \
             -Wl,-exported_symbol,_ds_start \
             -o collector.dylib \
             src/raw_collector.c \
