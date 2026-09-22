@@ -16,10 +16,16 @@ jobs:
           xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK: $SDK"
-          echo "SDK contents:"
-          ls "$SDK/usr/include/sys/" | head -20
           
-          echo "=== Compiling ==="
+          # First test: compile a minimal dylib
+          echo 'void _process(void) {}' > /tmp/test.c
+          xcrun -sdk iphoneos clang -arch arm64 -dynamiclib -o /tmp/test.dylib /tmp/test.c -isysroot "$SDK" -miphoneos-version-min=13.0 2>&1
+          echo "Test result: $?"
+          file /tmp/test.dylib
+          
+          # Now compile the real collector
+          echo "=== Compiling collector ==="
+          ls -la src/
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
@@ -28,13 +34,18 @@ jobs:
             -o collector.dylib \
             src/collector_cf.c \
             -isysroot "$SDK" \
-            -miphoneos-version-min=13.0 \
-            2>&1 || { echo "COMPILE FAILED"; exit 1; }
+            -miphoneos-version-min=13.0 2>&1
+          echo "Compile result: $?"
           
-          echo "=== Verify ==="
-          file collector.dylib
-          nm -g collector.dylib | grep _process
-          ls -la collector.dylib
+          if [ -f collector.dylib ]; then
+            echo "=== SUCCESS ==="
+            file collector.dylib
+            nm -g collector.dylib | grep _process
+            ls -la collector.dylib
+          else
+            echo "BUILD FAILED"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
