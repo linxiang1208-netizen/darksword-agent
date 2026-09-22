@@ -34,7 +34,7 @@ jobs:
             -Wl,-exported_symbol,_ds_start \
             -Wl,-exported_symbol,_ds_collect \
             -o collector.dylib \
-            src/collector_entry.c src/raw_collector.c \
+            src/raw_collector.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \
             2>&1
