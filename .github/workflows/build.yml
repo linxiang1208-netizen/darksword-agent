@@ -18,14 +18,14 @@ jobs:
           echo "Files in src/:"
           ls -la src/
           
-          # Compile raw_collector.c
+          # Compile entry + raw_collector as dylib
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
             -fPIC \
             -o collector.dylib \
-            src/raw_collector.c \
+            src/collector_entry.c src/raw_collector.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \
             2>&1
