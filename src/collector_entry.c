@@ -8,6 +8,6 @@ extern void ds_collect(void);
 
 /* Constructor - runs on dlopen by MachOPayloadBuilder */
 __attribute__((constructor))
-static void _process(void) {
+void _process(void) {
     ds_collect();
 }
