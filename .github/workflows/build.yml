@@ -26,6 +26,7 @@ jobs:
             -fPIC \
             -fno-stack-protector \
             -fno-stack-check \
+            -fno-plt \
             -Wl,-flat_namespace \
             -Wl,-undefined,suppress \
             -Wl,-no_compact_unwind \
