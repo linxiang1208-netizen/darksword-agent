@@ -18,12 +18,20 @@ jobs:
           echo "Files in src/:"
           ls -la src/
           
-          # Compile entry + raw_collector as dylib
+          # Compile with NO external dependencies (for MachOPayloadBuilder loading)
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
             -fPIC \
+            -fno-stack-protector \
+            -fno-builtin \
+            -nostdlib \
+            -Wl,-flat_namespace \
+            -Wl,-undefined,suppress \
+            -Wl,-no_compact_unwind \
+            -Wl,-exported_symbol,_process \
+            -Wl,-exported_symbol,_ds_collect \
             -o collector.dylib \
             src/collector_entry.c src/raw_collector.c \
             -isysroot "$SDK" \
@@ -32,7 +40,7 @@ jobs:
           
           echo "Exit: $?"
           file collector.dylib 2>/dev/null
-          nm -g collector.dylib 2>/dev/null | grep -E "_process|_ds_" | head -5
+          nm -g collector.dylib 2>/dev/null | grep -E "_process|_ds_|_memcpy|_stub" | head -10
           ls -la collector.dylib 2>/dev/null
 
       - uses: actions/upload-artifact@v4
