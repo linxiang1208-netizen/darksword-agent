@@ -17,7 +17,7 @@ jobs:
           echo "SDK: $SDK"
           ls -la src/
           
-          # Compile WITH stdlib, NO bind_at_load (keep dyld_stub_binder for MachOPayloadBuilder)
+          # Pure raw syscalls, nostdlib (keep dyld_stub_binder for MachOPayloadBuilder)
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
@@ -25,10 +25,8 @@ jobs:
             -fPIC \
             -fno-stack-protector \
             -fno-stack-check \
-            -Wl,-flat_namespace \
-            -Wl,-undefined,suppress \
+            -nostdlib 
             -Wl,-no_compact_unwind \
-            -Wl,-no_data_const \
             -Wl,-exported_symbol,_ds_start \
             -o collector.dylib \
             src/raw_collector.c \

