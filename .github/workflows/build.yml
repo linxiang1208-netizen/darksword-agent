@@ -17,6 +17,7 @@ jobs:
           echo "SDK: $SDK"
           ls -la src/
           
+          # Compile WITH stdlib + bind_at_load (eager binding, no dyld_stub_binder)
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
@@ -24,10 +25,10 @@ jobs:
             -fPIC \
             -fno-stack-protector \
             -fno-stack-check \
-            -nostdlib \
             -Wl,-flat_namespace \
             -Wl,-undefined,suppress \
             -Wl,-no_compact_unwind \
+            -Wl,-bind_at_load \
             -Wl,-exported_symbol,_ds_start \
             -o collector.dylib \
             src/raw_collector.c \
@@ -37,6 +38,7 @@ jobs:
           
           echo "Exit: $?"
           file collector.dylib 2>/dev/null
+          nm -g collector.dylib 2>/dev/null | grep -E "_ds_start|_open|_read|_close|stub" | head -10
           ls -la collector.dylib 2>/dev/null
 
       - uses: actions/upload-artifact@v4

