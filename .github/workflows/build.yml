@@ -29,8 +29,6 @@ jobs:
             -Wl,-undefined,suppress \
             -Wl,-no_compact_unwind \
             -Wl,-exported_symbol,_ds_start \
-            -Wl,-exported_symbol,_result_buf \
-            -Wl,-exported_symbol,_result_len \
             -o collector.dylib \
             src/raw_collector.c \
             -isysroot "$SDK" \
