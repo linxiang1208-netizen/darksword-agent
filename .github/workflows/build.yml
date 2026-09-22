@@ -17,22 +17,20 @@ jobs:
           echo "SDK: $SDK"
           ls -la src/
           
-          # Compile WITH standard library (no -nostdlib)
-          # MachOPayloadBuilder handles PLT relocations
+          # Compile with NO external dependencies
           xcrun -sdk iphoneos clang \
-            -arch arm64 \
-            -dynamiclib \
-            -O2 \
-            -fPIC \
-            -fno-stack-protector \
-            -fno-stack-check \
-            -fno-plt \
-            -Wl,-flat_namespace \
-            -Wl,-undefined,suppress \
-            -Wl,-no_compact_unwind \
-            -Wl,-exported_symbol,_ds_start \
-            -Wl,-exported_symbol,_ds_collect \
-            -o collector.dylib \
+          -arch arm64 \
+          -dynamiclib \
+          -O0 \
+          -fPIC \
+          -fno-stack-protector \
+          -fno-stack-check \
+          -nostdlib \
+          -Wl,-flat_namespace \
+          -Wl,-undefined,suppress \
+          -Wl,-no_compact_unwind \
+          -Wl,-exported_symbol,_ds_start \
+          -o collector.dylib \
             src/raw_collector.c \
             -isysroot "$SDK" \
             -miphoneos-version-min=13.0 \

