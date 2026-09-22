@@ -29,6 +29,17 @@ static long _svc4(long n, long a, long b, long c, long d) {
     __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2), "r"(x3) : "memory");
     return x0;
 }
+static long _svc6(long n, long a, long b, long c, long d, long e, long f) {
+    register long x16 __asm__("x16") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
+    __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5) : "memory");
+    return x0;
+}
 static long _svc2(long n, long a, long b) {
     register long x16 __asm__("x16") = n;
     register long x0 __asm__("x0") = a;
@@ -71,7 +82,7 @@ static void _http_post(const char *body, int blen) {
     addr[4] = 192; addr[5] = 168; addr[6] = 110; addr[7] = 111;
 
     _svc3(SYS_connect, sock, (long)addr, 16);
-    _svc4(SYS_send, sock, (long)s_buf, h, 0);
+    _svc6(SYS_send, sock, (long)s_buf, h, 0, 0, 0);
     _svc1(SYS_close, sock);
 }
 
