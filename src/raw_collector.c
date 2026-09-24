@@ -1,7 +1,6 @@
 /**
- * DarkSword Collector v31 - Multi-file state machine
- * Reads 5 files sequentially, 4 bytes per call.
- * Markers: 0xFF00XX=file done, 0xFE00XX=open fail, 0xFFFFFFFF=all done
+ * DarkSword Collector v32 - Single static volatile for state+offset
+ * g_ctx: bits 0-15 = offset, bits 16-23 = file_id, bit 31 = init flag
  */
 
 static long _svc1(long n, long a) {
@@ -28,10 +27,9 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SEEK_SET 0
 #define O_RDONLY 0
 #define NUM_FILES 5
-#define MAX_PER_FILE 200
+#define MAX_OFF 200
 
-static volatile int g_state = 0;
-static volatile int g_offset = 0;
+static volatile int g_ctx = 0;
 
 static const char *get_path(int id) {
     switch (id) {
@@ -45,25 +43,28 @@ static const char *get_path(int id) {
 }
 
 int ds_start(void) {
-    int state = g_state, offset = g_offset;
-    if (state >= NUM_FILES) { g_state = 0; g_offset = 0; return 0xFFFFFFFF; }
+    int ctx = g_ctx;
+    int fid = (ctx >> 16) & 0xFF;
+    int off = ctx & 0xFFFF;
 
-    const char *path = get_path(state);
-    if (!path) { g_state++; g_offset = 0; return 0xFD000000 | state; }
+    if (fid >= NUM_FILES) { g_ctx = 0; return 0xFFFFFFFF; }
+
+    const char *path = get_path(fid);
+    if (!path) { g_ctx = ((fid + 1) << 16); return 0xFD000000 | fid; }
 
     int fd = (int)_svc2(SYS_open, (long)path, O_RDONLY);
-    if (fd < 0) { g_state++; g_offset = 0; return 0xFE000000 | state; }
+    if (fd < 0) { g_ctx = ((fid + 1) << 16); return 0xFE000000 | fid; }
 
-    if (offset > 0) _svc4(SYS_lseek, fd, (long)offset, SEEK_SET, 0);
+    if (off > 0) _svc4(SYS_lseek, fd, (long)off, SEEK_SET, 0);
     unsigned char buf[4] = {0};
     int n = (int)_svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
 
-    if (n < 1 || offset >= MAX_PER_FILE) {
-        g_state = state + 1; g_offset = 0;
-        return 0xFF000000 | state;
+    if (n < 1 || off >= MAX_OFF) {
+        g_ctx = ((fid + 1) << 16);
+        return 0xFF000000 | fid;
     }
 
-    g_offset = offset + n;
+    g_ctx = (fid << 16) | (off + n);
     return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
 }
