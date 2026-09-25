@@ -1,0 +1,38 @@
+name: Build Minimal KRW
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build minimal krw.dylib
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          
+          xcrun -sdk iphoneos clang \
+            -arch arm64 \
+            -dynamiclib \
+            -O0 \
+            -fPIC \
+            -fno-stack-protector \
+            -nostdlib \
+            -Wl,-flat_namespace \
+            -Wl,-undefined,suppress \
+            -Wl,-exported_symbol,_ds_start \
+            -o krw_minimal.dylib \
+            src/clearsword/krw_minimal.c \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=13.0 \
+            2>&1
+          
+          echo "Exit: $?"
+          ls -la krw_minimal.dylib
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: krw-minimal
+          path: krw_minimal.dylib
