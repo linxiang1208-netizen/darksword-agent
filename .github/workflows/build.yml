@@ -16,14 +16,14 @@ jobs:
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          # Use -nostdlib but with two-level namespace
+          # Use -fobjc-arc to generate __DATA_CONST and __DATA segments
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
             -fPIC \
             -fno-stack-protector \
-            -nostdlib \
+            -fobjc-arc \
             -Wl,-twolevel_namespace \
             -Wl,-undefined,dynamic_lookup \
             -Wl,-exported_symbol,_process \
@@ -36,7 +36,9 @@ jobs:
           
           echo "Exit: $?"
           file collector.dylib
-          nm -g collector.dylib 2>/dev/null | head -10
+          
+          # Check segments
+          otool -l collector.dylib 2>/dev/null | grep -A2 "segname" | head -20
 
       - uses: actions/upload-artifact@v4
         if: success()
