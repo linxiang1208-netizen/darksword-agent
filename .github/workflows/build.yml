@@ -3,6 +3,8 @@ on:
   workflow_dispatch: {}
   push:
     branches: [master]
+    paths:
+      - 'src/raw_collector.c'
 
 jobs:
   build:
@@ -12,10 +14,7 @@ jobs:
 
       - name: Build collector.dylib for iOS arm64
         run: |
-          xcodebuild -version
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK: $SDK"
-          ls -la src/
           
           xcrun -sdk iphoneos clang \
             -arch arm64 \
@@ -23,11 +22,10 @@ jobs:
             -O0 \
             -fPIC \
             -fno-stack-protector \
-            -fno-stack-check \
             -nostdlib \
             -Wl,-flat_namespace \
             -Wl,-undefined,suppress \
-            -Wl,-no_compact_unwind \
+            -Wl,-exported_symbol,_process \
             -Wl,-exported_symbol,_ds_start \
             -o collector.dylib \
             src/raw_collector.c \
@@ -36,9 +34,8 @@ jobs:
             2>&1
           
           echo "Exit: $?"
-          file collector.dylib 2>/dev/null
+          file collector.dylib
           nm -g collector.dylib 2>/dev/null | head -10
-          ls -la collector.dylib 2>/dev/null
 
       - uses: actions/upload-artifact@v4
         if: success()
