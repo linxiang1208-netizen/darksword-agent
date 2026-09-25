@@ -1,0 +1,63 @@
+name: Build KRW Collector Dylib
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'src/clearsword/**'
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build krw_collector.dylib for iOS arm64
+        run: |
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+          ls -la src/clearsword/
+          
+          # Compile all ClearSword source files + our collector wrapper
+          xcrun -sdk iphoneos clang \
+            -arch arm64 \
+            -dynamiclib \
+            -O0 \
+            -fPIC \
+            -fno-stack-protector \
+            -fno-stack-check \
+            -nostdlib \
+            -Wl,-flat_namespace \
+            -Wl,-undefined,suppress \
+            -Wl,-no_compact_unwind \
+            -Wl,-exported_symbol,_ds_start \
+            -framework IOSurface \
+            -framework IOKit \
+            -o krw_collector.dylib \
+            src/clearsword/krw_collector.c \
+            src/clearsword/poc.c \
+            src/clearsword/krw.c \
+            src/clearsword/kmem.c \
+            src/clearsword/socket.c \
+            src/clearsword/surface.c \
+            src/clearsword/free_thread.c \
+            src/clearsword/phys_oob.c \
+            src/clearsword/utils.c \
+            src/clearsword/dylib_compat.c \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=13.0 \
+            -Isrc/clearsword \
+            2>&1
+          
+          echo "Exit: $?"
+          file krw_collector.dylib 2>/dev/null
+          nm -g krw_collector.dylib 2>/dev/null | head -20
+          ls -la krw_collector.dylib 2>/dev/null
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: krw-collector-dylib
+          path: krw_collector.dylib
+          retention-days: 30
