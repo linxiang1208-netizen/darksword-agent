@@ -16,14 +16,16 @@ jobs:
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           
-          # Match original bootstrap flags: NOUNDEFS|TWOLEVEL
-          # No -nostdlib, no -flat_namespace, no -undefined,suppress
+          # Use -nostdlib but with two-level namespace
           xcrun -sdk iphoneos clang \
             -arch arm64 \
             -dynamiclib \
             -O2 \
             -fPIC \
             -fno-stack-protector \
+            -nostdlib \
+            -Wl,-twolevel_namespace \
+            -Wl,-undefined,dynamic_lookup \
             -Wl,-exported_symbol,_process \
             -Wl,-exported_symbol,_ds_start \
             -o collector.dylib \
