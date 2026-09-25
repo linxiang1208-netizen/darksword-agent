@@ -1,6 +1,8 @@
 name: Build Minimal KRW
 on:
   workflow_dispatch: {}
+  push:
+    branches: [master]
 
 jobs:
   build:
