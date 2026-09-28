@@ -14,7 +14,7 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "iOS SDK: $SDK"
           
-          # Step 1: Compile to object
+          # Compile to object
           xcrun --sdk iphoneos clang \
             -arch arm64 \
             -isysroot "$SDK" \
@@ -26,7 +26,7 @@ jobs:
           echo "=== Object symbols ==="
           nm collector.o
           
-          # Step 2: Link as dylib (no -exported_symbol, use default visibility)
+          # Link as dylib
           xcrun --sdk iphoneos clang \
             -arch arm64 \
             -isysroot "$SDK" \
@@ -40,7 +40,7 @@ jobs:
           file libcollector.dylib
           otool -hv libcollector.dylib
           echo "=== Segments ==="
-          otool -l libcollector.dylib | grep -E "(segname|vmaddr|vmsize)" | head -12
+          otool -l libcollector.dylib | grep -E "(segname|vmaddr|vmsize|nsects)" | head -20
           echo "=== Symbols ==="
           nm libcollector.dylib | grep _process
           echo "=== Size ==="
