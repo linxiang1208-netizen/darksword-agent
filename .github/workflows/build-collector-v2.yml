@@ -11,30 +11,44 @@ jobs:
       
       - name: Build dylib with iOS SDK
         run: |
-          # Find iOS SDK
+          # List available Xcode versions
+          ls /Applications/ | grep Xcode
+          
+          # Select Xcode
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer 2>/dev/null || \
+          sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer 2>/dev/null || \
+          sudo xcode-select -s /Applications/Xcode_15.0.app/Contents/Developer 2>/dev/null || true
+          
+          xcode-select -p
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "iOS SDK: $SDK"
+          echo "SDK contents (lib):"
+          ls "$SDK/usr/lib/" | grep -i system | head -5
           
-          # Compile with full iOS SDK (no -nostdlib!)
+          # Compile + link as iOS dylib with full SDK
           xcrun --sdk iphoneos clang \
-            -target arm64-apple-ios15.0 \
+            -arch arm64 \
             -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
             -dynamiclib \
             -Oz \
             -fPIC \
             -fno-stack-protector \
+            -fvisibility=default \
             -Wl,-install_name,@rpath/libcollector.dylib \
             -Wl,-exported_symbol,_process \
             -o libcollector.dylib \
             src/collector_v2.c
           
-          # Check flags
+          echo "=== Build result: $? ==="
           echo "=== dylib info ==="
           file libcollector.dylib
+          echo "=== Headers ==="
           otool -hv libcollector.dylib
-          otool -l libcollector.dylib | grep -A5 "LC_SEGMENT_64"
-          echo "=== _process offset ==="
-          nm libcollector.dylib | grep _process
+          echo "=== Segments ==="
+          otool -l libcollector.dylib 2>/dev/null | grep -E "(cmd|cmdsize|segname|vmaddr|vmsize|fileoff|filesize|nsects)" | head -30
+          echo "=== _process symbol ==="
+          nm libcollector.dylib | grep _process || echo "no nm output"
           echo "=== size ==="
           ls -la libcollector.dylib
           
