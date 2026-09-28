@@ -17,7 +17,7 @@ static int _file_size = 0;
 
 // Entry point called by Coruna exploit chain
 // Reads /etc/hosts, stores in _file_buf, returns first 4 bytes
-int _process(void *arg) {
+int process(void *arg) {
     // Reset
     _file_size = 0;
     for (int i = 0; i < 4096; i++) _file_buf[i] = 0;
