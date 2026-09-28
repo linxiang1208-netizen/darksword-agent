@@ -1,0 +1,45 @@
+name: Build collector_v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build dylib with iOS SDK
+        run: |
+          # Find iOS SDK
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "iOS SDK: $SDK"
+          
+          # Compile with full iOS SDK (no -nostdlib!)
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios15.0 \
+            -isysroot "$SDK" \
+            -dynamiclib \
+            -Oz \
+            -fPIC \
+            -fno-stack-protector \
+            -Wl,-install_name,@rpath/libcollector.dylib \
+            -Wl,-exported_symbol,_process \
+            -o libcollector.dylib \
+            src/collector_v2.c
+          
+          # Check flags
+          echo "=== dylib info ==="
+          file libcollector.dylib
+          otool -hv libcollector.dylib
+          otool -l libcollector.dylib | grep -A5 "LC_SEGMENT_64"
+          echo "=== _process offset ==="
+          nm libcollector.dylib | grep _process
+          echo "=== size ==="
+          ls -la libcollector.dylib
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: collector-v2
+          path: libcollector.dylib
