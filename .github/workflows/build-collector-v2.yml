@@ -9,47 +9,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Build dylib with iOS SDK
+      - name: Build dylib
         run: |
-          # List available Xcode versions
-          ls /Applications/ | grep Xcode
-          
-          # Select Xcode
-          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer 2>/dev/null || \
-          sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer 2>/dev/null || \
-          sudo xcode-select -s /Applications/Xcode_15.0.app/Contents/Developer 2>/dev/null || true
-          
-          xcode-select -p
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "iOS SDK: $SDK"
-          echo "SDK contents (lib):"
-          ls "$SDK/usr/lib/" | grep -i system | head -5
           
-          # Compile + link as iOS dylib with full SDK
+          # Step 1: Compile to object
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -Oz -fPIC -fno-stack-protector \
+            -c -o collector.o \
+            src/collector_v2.c
+          
+          echo "=== Object symbols ==="
+          nm collector.o
+          
+          # Step 2: Link as dylib (no -exported_symbol, use default visibility)
           xcrun --sdk iphoneos clang \
             -arch arm64 \
             -isysroot "$SDK" \
             -miphoneos-version-min=15.0 \
             -dynamiclib \
-            -Oz \
-            -fPIC \
-            -fno-stack-protector \
-            -fvisibility=default \
             -Wl,-install_name,@rpath/libcollector.dylib \
-            -Wl,-exported_symbol,_process \
             -o libcollector.dylib \
-            src/collector_v2.c
+            collector.o
           
-          echo "=== Build result: $? ==="
-          echo "=== dylib info ==="
+          echo "=== Exit: $? ==="
           file libcollector.dylib
-          echo "=== Headers ==="
           otool -hv libcollector.dylib
           echo "=== Segments ==="
-          otool -l libcollector.dylib 2>/dev/null | grep -E "(cmd|cmdsize|segname|vmaddr|vmsize|fileoff|filesize|nsects)" | head -30
-          echo "=== _process symbol ==="
-          nm libcollector.dylib | grep _process || echo "no nm output"
-          echo "=== size ==="
+          otool -l libcollector.dylib | grep -E "(segname|vmaddr|vmsize)" | head -12
+          echo "=== Symbols ==="
+          nm libcollector.dylib | grep _process
+          echo "=== Size ==="
           ls -la libcollector.dylib
           
       - name: Upload artifact

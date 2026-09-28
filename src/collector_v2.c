@@ -1,21 +1,23 @@
+// Explicit declarations - no headers needed (avoids iOS SDK path issues)
+extern int open(const char *path, int oflag, ...);
+extern long long read(int fd, void *buf, long long count);
+extern int close(int fd);
 
-#include <fcntl.h>
-#include <unistd.h>
+#ifndef O_RDONLY
+#define O_RDONLY 0
+#endif
 
-// This function is called by the exploit chain
-// It reads /etc/hosts and returns first 4 bytes as proof
+// Called by Coruna exploit chain
+// Reads /etc/hosts, returns first 4 bytes as proof of native file access
 int _process(void *arg) {
-    // Open /etc/hosts
     int fd = open("/etc/hosts", O_RDONLY);
     if (fd < 0) return -1;
     
-    // Read first 4 bytes
     unsigned char buf[4] = {0};
-    ssize_t n = read(fd, buf, 4);
+    long long n = read(fd, buf, 4);
     close(fd);
     
     if (n < 4) return -2;
     
-    // Return first 4 bytes as int
     return *(int*)buf;
 }
